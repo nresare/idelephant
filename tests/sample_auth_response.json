@@ -1,0 +1,12 @@
+{
+  "id": "Xv5Kt8yyIMqodBpOaFHL3w",
+  "rawId": "Xv5Kt8yyIMqodBpOaFHL3w",
+  "response": {
+    "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiUkppM3NkQkdxeEF2d0ZveXhaanR0Z3QwIiwib3JpZ2luIjoiaHR0cDovL2xvY2FsaG9zdDozMDAwIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+    "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4/krrmihjLHmVzzuoMdl2MdAAAAAA",
+    "signature": "MEUCIQD0ZG1W+ehb5vKf+h4RgVsO1xNBEQVSlPMfoYY9JXR+OAIgD//FC+KHv0eyNPiM85enJsZ7D0fJ95H+ZlGyBsS5E4s",
+    "userHandle": "pe45esglhdzqs6p33rar"
+  },
+  "type": "public-key",
+  "authenticatorAttachment": "platform"
+}

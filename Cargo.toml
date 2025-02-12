@@ -1,0 +1,33 @@
+[package]
+name = "idelephant"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+anyhow = "1.0.95"
+axum = "0.8.1"
+tower = { version = "0.5.2", features = ["util", "timeout", "load-shed", "limit"]}
+rust-embed = { version = "8.5.0", features = ["axum", "compression"] }
+tokio = { version = "1.43.0", features = ["full"] }
+mime_guess = "2.0.5"
+tower-http = { version = "0.6.2", features = ["trace", "add-extension", "auth", "compression-full", "limit"] }
+serde = { version = "1.0.217", features = ["derive"] }
+chrono = { version = "0.4.39", features = ["serde"]}
+tracing = "0.1.41"
+tracing-subscriber = {  version = "0.3.19", features = ["env-filter"] }
+rand = "0.8.5"
+base64 = "0.22.1"
+surrealdb = { version = "2.1.4", features = ["kv-mem", "kv-surrealkv"] }
+tower-sessions = "0.14.0"
+tower-sessions-surrealdb-store = "0.6.0"
+thiserror = "2.0.11"
+ciborium = "0.2.2"
+serde_json = "1.0.138"
+time = "0.3.36"
+sha2 = "0.10.8"
+spki = "0.7.3"
+p256 = "0.13.2"
+
+[dev-dependencies]
+tempfile = "3.15.0"
