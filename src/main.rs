@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
     //     .init();
     tracing_subscriber::registry()
         .with(EnvFilter::new(
-            "identityprovider=info,tower_http=info,axum::rejection=trace",
+            "idelephant=info,tower_http=info,axum::rejection=trace",
         ))
         .with(tracing_subscriber::fmt::layer().compact())
         .init();
