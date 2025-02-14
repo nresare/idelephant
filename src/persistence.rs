@@ -30,6 +30,7 @@ pub struct Credential {
     pub id: Vec<u8>,
     pub public_key: Vec<u8>,
     pub public_key_algorithm: i32,
+    pub sign_count: u32,
 }
 
 #[derive(Clone)]
@@ -112,6 +113,7 @@ mod tests {
                 id: b"some_id".into(),
                 public_key: b"public_key".into(),
                 public_key_algorithm: -7,
+                sign_count: 0,
             }],
         };
 
@@ -127,6 +129,7 @@ mod tests {
                 id: b"some_id".into(),
                 public_key: b"public_key".into(),
                 public_key_algorithm: -7,
+                sign_count: 0,
             }]
         );
 

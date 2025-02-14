@@ -14,6 +14,11 @@ pub enum IdentityError {
     Logic(String),
     #[error("Persistent storage error: {0}")]
     PersistentStorage(#[from] surrealdb::Error),
+    #[error("Attempting to parse data with an invalid format: {detail}")]
+    InvalidInput {
+        detail: String,
+        source: Option<anyhow::Error>,
+    },
 }
 
 impl IntoResponse for IdentityError {

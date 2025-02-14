@@ -1,13 +1,16 @@
+mod attestation;
 mod client_data;
 
 use self::client_data::ClientData;
 use crate::json::ValueWrapper;
+use crate::webauthn::attestation::AttestationObject;
 use anyhow::{anyhow, Context};
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::{Signature, VerifyingKey};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use spki::SubjectPublicKeyInfoRef;
 // The naming in the spec is a bit confusing here, as the type of the return value
 // of both credential creation and authentication are called PublicKeyCredential but
@@ -29,7 +32,7 @@ pub struct PublicKeyCredentialAuthenticate {
 pub struct AuthenticatorAttestationResponse {
     pub public_key: Vec<u8>,
     pub public_key_algorithm: i32,
-    //pub attestation: Vec<u8>,
+    pub attestation: AttestationObject,
     pub client_data: ClientData,
     //pub authenticator_data: Vec<u8>,
 }
@@ -44,20 +47,56 @@ pub struct AuthenticatorAssertionResponse {
 impl PublicKeyCredentialRegister {
     // This method maps to the steps in
     // https://www.w3.org/TR/webauthn-2/#sctn-registering-a-new-credential
-    pub fn validate(&self, challenge: Vec<u8>, origin: impl AsRef<str>) -> anyhow::Result<()> {
+    pub fn validate(
+        &self,
+        challenge: impl AsRef<[u8]>,
+        origin: impl AsRef<str>,
+        relying_party_id: impl AsRef<str>,
+        require_user_verified: bool,
+    ) -> anyhow::Result<()> {
         // todo: have a look at extensions
-        if self.response.client_data.request_type != "webauthn.create" {
+        let client_data = &self.response.client_data;
+        if client_data.request_type != "webauthn.create" {
             return Err(anyhow!(
                 "type is '{}' is not 'webauthn.create'",
                 self.response.client_data.request_type
             ));
         }
-        if self.response.client_data.challenge != challenge {
+        if client_data.challenge != challenge.as_ref() {
             return Err(anyhow!("Challenge mismatch"));
         }
-        if self.response.client_data.origin != origin.as_ref() {
+        if client_data.origin != origin.as_ref() {
             return Err(anyhow!("origin mismatch"));
         }
+        let origin_sha256 = {
+            let mut hasher = Sha256::new();
+            hasher.update(relying_party_id.as_ref());
+            hasher.finalize()
+        };
+        let attestation = &self.response.attestation;
+        if attestation.auth_data.relaying_party_id_hash != origin_sha256.as_slice() {
+            return Err(anyhow!("rpID mismatch"));
+        }
+        if attestation.format != "none" {
+            return Err(anyhow!(
+                "Don't know how to handle attestation formats other than 'none' yet"
+            ));
+        }
+
+        if !attestation.attestation_statement.is_empty() {
+            return Err(anyhow!(
+                "With attestation format 'none', attestation statement should be empty"
+            ));
+        }
+
+        if !attestation.auth_data.user_present {
+            return Err(anyhow!("Invalid registration, 'User Present' flag not set"));
+        }
+
+        if require_user_verified && !attestation.auth_data.user_verified {
+            return Err(anyhow!("Invalid registration, 'User Present' flag not set"));
+        }
+
         Ok(())
     }
 }
@@ -123,11 +162,13 @@ fn make_register_response(
 
     let client_json = STANDARD_NO_PAD.decode(vw.str("clientDataJSON")?)?;
 
+    let attestation = STANDARD_NO_PAD.decode(vw.str("attestationObject")?)?;
+
     Ok(AuthenticatorAttestationResponse {
         public_key: STANDARD_NO_PAD.decode(vw.str("publicKey")?)?,
         public_key_algorithm: vw.num("publicKeyAlgorithm")?,
         // TODO: uncomment this when we add the attestation validation stuff
-        //attestation: STANDARD_NO_PAD.decode(vw.str("attestationObject")?)?,
+        attestation: AttestationObject::try_from(attestation.as_slice())?,
         client_data: ClientData::try_from(client_json.as_ref())?,
         //authenticator_data: STANDARD_NO_PAD.decode(vw.str("authenticatorData")?)?,
     })
@@ -189,8 +230,10 @@ mod tests {
         )))?;
         let credential = PublicKeyCredentialRegister::try_from(&value)?;
         credential.validate(
-            Vec::from(b"hq\xb9\x17)\xe5\xe5\\\xa5\xb4\xfa[\x08(\xb2\x91^\x96"),
-            "http://localhost:3000".to_string(),
+            b"hq\xb9\x17)\xe5\xe5\\\xa5\xb4\xfa[\x08(\xb2\x91^\x96",
+            "http://localhost:3000",
+            "localhost",
+            true,
         )?;
         Ok(())
     }
