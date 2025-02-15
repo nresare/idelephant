@@ -1,9 +1,10 @@
-use std::path::Path;
-use std::sync::Arc;
-
 use crate::error::IdentityError;
+use crate::AppState;
+use axum::extract::FromRef;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::sync::Arc;
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::{RecordId, Surreal};
 
@@ -69,6 +70,12 @@ impl PersistenceService {
     pub async fn update(&self, id: &str, identity: Identity) -> Result<bool, IdentityError> {
         let result: Option<Identity> = self.db.update(("identity", id)).content(identity).await?;
         Ok(result.is_some())
+    }
+}
+
+impl FromRef<AppState> for PersistenceService {
+    fn from_ref(input: &AppState) -> Self {
+        input.ps.clone()
     }
 }
 

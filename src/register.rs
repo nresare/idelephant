@@ -1,6 +1,6 @@
 use crate::error::IdentityError;
 use crate::persistence::IdentityState::Allocated;
-use crate::persistence::{Credential, Identity, IdentityState};
+use crate::persistence::{Credential, Identity, IdentityState, PersistenceService};
 use crate::util::make_token;
 use crate::AppState;
 use anyhow::anyhow;
@@ -40,7 +40,7 @@ pub(super) fn register_routes() -> Router<AppState> {
 
 async fn register_start(
     session: Session,
-    State(state): State<AppState>,
+    State(persistence_service): State<PersistenceService>,
     Json(register_start): Json<RegisterStart>,
 ) -> Result<Json<RegisterStartResponse>, IdentityError> {
     info!(register_start.email, "creating a challenge for user");
@@ -53,7 +53,7 @@ async fn register_start(
         },
         created: Utc::now(),
     };
-    let user_id = state.ps.persist(identity).await?;
+    let user_id = persistence_service.persist(identity).await?;
     session.insert(REGISTERING_ID_KEY, &user_id).await?;
     info!(user_id, "user allocated");
     Ok(Json(RegisterStartResponse {
@@ -64,7 +64,7 @@ async fn register_start(
 
 pub(super) async fn register_finish(
     session: Session,
-    State(state): State<AppState>,
+    State(persistence_service): State<PersistenceService>,
     Json(credential): Json<Value>,
 ) -> Result<(), IdentityError> {
     let credential: PublicKeyCredentialRegister = (&credential).try_into()?;
@@ -75,7 +75,7 @@ pub(super) async fn register_finish(
         )));
     };
 
-    let Some(mut identity) = state.ps.fetch(&id).await? else {
+    let Some(mut identity) = persistence_service.fetch(&id).await? else {
         return Err(IdentityError::Anyhow(anyhow!(
             "Could not find identity in persistent storage"
         )));
@@ -98,7 +98,7 @@ pub(super) async fn register_finish(
         }],
     };
 
-    state.ps.update(&id, identity).await?;
+    persistence_service.update(&id, identity).await?;
     session.remove::<String>(REGISTERING_ID_KEY).await?;
     Ok(())
 }
