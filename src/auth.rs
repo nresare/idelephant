@@ -1,6 +1,6 @@
 use crate::error::IdentityError;
-use crate::persistence::Identity;
 use crate::persistence::IdentityState::Active;
+use crate::persistence::{Identity, PersistenceService};
 use crate::util::make_token;
 use crate::webauthn::PublicKeyCredentialAuthenticate;
 use crate::AppState;
@@ -39,7 +39,7 @@ async fn auth_start(session: Session) -> Result<Json<AuthStart>, IdentityError> 
 
 async fn auth_finish(
     session: Session,
-    State(state): State<AppState>,
+    State(persistence_service): State<PersistenceService>,
     Json(credential): Json<Value>,
 ) -> Result<String, IdentityError> {
     let Some(challenge): Option<Vec<u8>> = session.get(AUTH_CHALLENGE).await? else {
@@ -54,7 +54,7 @@ async fn auth_finish(
         &credential.response.user_handle
     ))?;
 
-    let Some(identity) = state.ps.fetch(user_handle).await? else {
+    let Some(identity) = persistence_service.fetch(user_handle).await? else {
         return Err(IdentityError::Anyhow(anyhow!(
             "Could not find identity with id {user_handle}"
         )));
