@@ -1,4 +1,4 @@
-use crate::error::IdentityError;
+use crate::WebauthnError;
 use anyhow::{anyhow, Context};
 use ciborium::Value;
 use std::collections::HashMap;
@@ -56,19 +56,19 @@ impl TryFrom<&[u8]> for AttestationObject {
 }
 
 trait Invalid<T> {
-    fn invalid(self, detail: &'static str) -> Result<T, IdentityError>;
+    fn invalid(self, detail: &'static str) -> Result<T, WebauthnError>;
 }
 
 impl<T, E> Invalid<T> for Result<T, E>
 where
     E: Into<anyhow::Error>,
 {
-    fn invalid(self, detail: &'static str) -> Result<T, IdentityError> {
+    fn invalid(self, detail: &'static str) -> Result<T, WebauthnError> {
         match self {
             Ok(value) => Ok(value),
             Err(err) => {
                 let detail = detail.to_string();
-                Err(IdentityError::InvalidInput {
+                Err(WebauthnError::InvalidInput {
                     detail,
                     source: Some(err.into()),
                 })
@@ -78,12 +78,12 @@ where
 }
 
 impl<T> Invalid<T> for Option<T> {
-    fn invalid(self, detail: &'static str) -> Result<T, IdentityError> {
+    fn invalid(self, detail: &'static str) -> Result<T, WebauthnError> {
         match self {
             Some(value) => Ok(value),
             None => {
                 let detail = detail.to_string();
-                Err(IdentityError::InvalidInput {
+                Err(WebauthnError::InvalidInput {
                     detail,
                     source: None,
                 })
@@ -132,8 +132,8 @@ fn to_map(value: &Value) -> Result<HashMap<&str, &Value>, anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
-    use crate::error::IdentityError;
-    use crate::webauthn::attestation::AttestationObject;
+    use crate::attestation::AttestationObject;
+    use crate::WebauthnError;
     use base64::engine::general_purpose::STANDARD_NO_PAD;
     use base64::Engine;
     use sha2::{Digest, Sha256};
@@ -174,8 +174,8 @@ mod tests {
     fn test_invalid_input() -> anyhow::Result<()> {
         let result = AttestationObject::try_from(b"foobar".as_slice());
         let result = result.unwrap_err();
-        let result = result.downcast_ref::<IdentityError>().unwrap();
-        assert!(matches!(result, IdentityError::InvalidInput { .. }));
+        let result = result.downcast_ref::<WebauthnError>().unwrap();
+        assert!(matches!(result, WebauthnError::InvalidInput { .. }));
         Ok(())
     }
 }
