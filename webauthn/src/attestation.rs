@@ -21,29 +21,45 @@ pub struct AuthenticatorData {
     // attested_credential_data: Option<Vec<u8>>,
 }
 
+fn invalid<E: Into<anyhow::Error>>(detail: &'static str) -> impl FnOnce(E) -> WebauthnError {
+    |e| WebauthnError::InvalidInput {
+        detail: detail.to_string(),
+        source: Some(e.into()),
+    }
+}
+
+fn missing(detail: &'static str) -> impl FnOnce() -> WebauthnError {
+    || WebauthnError::InvalidInput {
+        detail: detail.to_string(),
+        source: None,
+    }
+}
+
 impl TryFrom<&[u8]> for AttestationObject {
     type Error = anyhow::Error;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        let value: Value = ciborium::from_reader(bytes)
-            .invalid("Could not parse AttestationObject, wrong CBOR format")?;
-        let m = to_map(&value)
-            .invalid("AttestationObject data could not be read as Map<String, Value>")?;
+        let value = ciborium::de::from_reader(bytes).map_err(invalid(
+            "Could not parse AttestationObject, wrong CBOR format",
+        ))?;
+        let m = to_map(&value).map_err(invalid(
+            "AttestationObject data could not be read as Map<String, Value>",
+        ))?;
 
         let format = m
             .get("fmt")
-            .invalid("AttestationObject is missing 'fmt' value")?;
+            .ok_or_else(missing("AttestationObject is missing 'fmt' value"))?;
         let format = format
             .as_text()
-            .invalid("Failed to parse AttestationObject")?
+            .ok_or_else(missing("Failed to parse AttestationObject"))?
             .to_string();
 
         let auth_data = m
             .get("authData")
-            .invalid("AttestationObject is missing 'authData' value")?;
+            .ok_or_else(missing("AttestationObject is missing 'authData' value"))?;
         let auth_data = auth_data
             .as_bytes()
-            .invalid("authData field not bytes")?
+            .ok_or_else(missing("authData field not bytes"))?
             .as_slice();
         let auth_data = AuthenticatorData::try_from(auth_data)?;
 
@@ -52,43 +68,6 @@ impl TryFrom<&[u8]> for AttestationObject {
             attestation_statement: HashMap::new(),
             auth_data,
         })
-    }
-}
-
-trait Invalid<T> {
-    fn invalid(self, detail: &'static str) -> Result<T, WebauthnError>;
-}
-
-impl<T, E> Invalid<T> for Result<T, E>
-where
-    E: Into<anyhow::Error>,
-{
-    fn invalid(self, detail: &'static str) -> Result<T, WebauthnError> {
-        match self {
-            Ok(value) => Ok(value),
-            Err(err) => {
-                let detail = detail.to_string();
-                Err(WebauthnError::InvalidInput {
-                    detail,
-                    source: Some(err.into()),
-                })
-            }
-        }
-    }
-}
-
-impl<T> Invalid<T> for Option<T> {
-    fn invalid(self, detail: &'static str) -> Result<T, WebauthnError> {
-        match self {
-            Some(value) => Ok(value),
-            None => {
-                let detail = detail.to_string();
-                Err(WebauthnError::InvalidInput {
-                    detail,
-                    source: None,
-                })
-            }
-        }
     }
 }
 
