@@ -1,11 +1,9 @@
 mod auth;
 mod embed;
 mod error;
-mod json;
 mod persistence;
 mod register;
 mod util;
-mod webauthn;
 
 use crate::auth::auth_routes;
 use crate::persistence::{make_db, PersistenceService};

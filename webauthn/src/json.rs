@@ -47,7 +47,7 @@ impl<'a> ValueWrapper<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::json::ValueWrapper;
+    use super::ValueWrapper;
     use anyhow::Error;
     use serde_json::json;
 

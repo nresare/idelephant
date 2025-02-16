@@ -1,9 +1,10 @@
 mod attestation;
 mod client_data;
+mod json;
 
 use self::client_data::ClientData;
+use crate::attestation::AttestationObject;
 use crate::json::ValueWrapper;
-use crate::webauthn::attestation::AttestationObject;
 use anyhow::{anyhow, Context};
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use base64::Engine;
@@ -12,12 +13,22 @@ use p256::ecdsa::{Signature, VerifyingKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use spki::SubjectPublicKeyInfoRef;
+use thiserror::Error;
 // The naming in the spec is a bit confusing here, as the type of the return value
 // of both credential creation and authentication are called PublicKeyCredential but
 // is holding different subclasses of AuthenticatorResponse in their respective response
 // field. To simplify things I have named them PublicKeyCredentialRegister for the one
 // used for key creation and registration and PublicKeyCredentialAuthenticate for the variant
 // holding an AuthenticatorAssertionResponse, used for user authentication.
+
+#[derive(Error, Debug)]
+enum WebauthnError {
+    #[error("Attempting to parse data with an invalid format: {detail}")]
+    InvalidInput {
+        detail: String,
+        source: Option<anyhow::Error>,
+    },
+}
 
 pub struct PublicKeyCredentialRegister {
     pub id: Vec<u8>,
