@@ -91,10 +91,10 @@ pub(super) async fn register_finish(
 
     identity.state = IdentityState::Active {
         credentials: vec![Credential {
-            id: credential.id,
-            public_key: credential.response.public_key,
-            public_key_algorithm: credential.response.public_key_algorithm,
-            sign_count: credential.response.attestation.auth_data.sign_count,
+            id: credential.id().to_vec(),
+            public_key: credential.response().public_key.to_vec(),
+            public_key_algorithm: credential.response().public_key_algorithm,
+            sign_count: credential.response().attestation.auth_data.sign_count,
         }],
     };
 

@@ -1,6 +1,6 @@
 use crate::WebauthnError;
 use anyhow::{anyhow, Context};
-use ciborium::Value;
+use ciborium::{cbor, into_writer, Value};
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]
@@ -8,6 +8,63 @@ pub struct AttestationObject {
     pub(crate) format: String,
     pub attestation_statement: HashMap<String, String>,
     pub auth_data: AuthenticatorData,
+}
+
+impl AttestationObject {
+    pub fn new(
+        format: String,
+        attestation_statement: HashMap<String, String>,
+        auth_data: AuthenticatorData,
+    ) -> Self {
+        AttestationObject {
+            format,
+            attestation_statement,
+            auth_data,
+        }
+    }
+
+    pub fn from_cbor(data: &[u8]) -> Result<Self, anyhow::Error> {
+        let value: Value = ciborium::from_reader(data)
+            .invalid("Could not parse AttestationObject, wrong CBOR format")?;
+        let m = to_map(&value)
+            .invalid("AttestationObject data could not be read as Map<String, Value>")?;
+
+        let format = m
+            .get("fmt")
+            .invalid("AttestationObject is missing 'fmt' value")?;
+        let format = format
+            .as_text()
+            .invalid("Failed to parse AttestationObject")?
+            .to_string();
+
+        let auth_data = m
+            .get("authData")
+            .invalid("AttestationObject is missing 'authData' value")?;
+        let auth_data = auth_data
+            .as_bytes()
+            .invalid("authData field not bytes")?
+            .as_slice();
+        let auth_data = AuthenticatorData::try_from(auth_data)?;
+
+        Ok(AttestationObject {
+            format,
+            attestation_statement: HashMap::new(),
+            auth_data,
+        })
+    }
+
+    pub fn to_cbor(&self) -> Box<[u8]> {
+        // todo figure out how this can go wrong
+        let value = cbor!({
+            "fmt" => "none",
+            "authData" => Value::Bytes(self.auth_data.to_binary_format().to_vec()),
+            "attStmt" => {},
+        })
+        .expect("Failed to build cbor Value");
+        let mut buf = Vec::new();
+        into_writer(&value, &mut buf).expect("failed to serialize to buffer");
+        buf.into_boxed_slice()
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -35,39 +92,23 @@ impl AuthenticatorData {
             sign_count,
         }
     }
-}
 
-impl TryFrom<&[u8]> for AttestationObject {
-    type Error = anyhow::Error;
+    pub fn to_binary_format(&self) -> Box<[u8]> {
+        let mut result = Vec::with_capacity(MIN_SIZE);
+        result.extend_from_slice(self.relying_party_id_hash.as_slice());
 
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        let value: Value = ciborium::from_reader(bytes)
-            .invalid("Could not parse AttestationObject, wrong CBOR format")?;
-        let m = to_map(&value)
-            .invalid("AttestationObject data could not be read as Map<String, Value>")?;
-
-        let format = m
-            .get("fmt")
-            .invalid("AttestationObject is missing 'fmt' value")?;
-        let format = format
-            .as_text()
-            .invalid("Failed to parse AttestationObject")?
-            .to_string();
-
-        let auth_data = m
-            .get("authData")
-            .invalid("AttestationObject is missing 'authData' value")?;
-        let auth_data = auth_data
-            .as_bytes()
-            .invalid("authData field not bytes")?
-            .as_slice();
-        let auth_data = AuthenticatorData::try_from(auth_data)?;
-
-        Ok(AttestationObject {
-            format,
-            attestation_statement: HashMap::new(),
-            auth_data,
-        })
+        let mut flags = 0u8;
+        if self.user_present {
+            flags |= 1;
+        }
+        if self.user_verified {
+            flags |= 1 << 2;
+        }
+        // todo: for now we always have the Attested Credential Data present, and never the extensions
+        flags |= 1 << 6;
+        result.push(flags);
+        result.extend(self.sign_count.to_be_bytes());
+        Box::from(result)
     }
 }
 
@@ -138,26 +179,6 @@ impl TryFrom<&[u8]> for AuthenticatorData {
     }
 }
 
-impl From<&AuthenticatorData> for Box<[u8]> {
-    fn from(data: &AuthenticatorData) -> Box<[u8]> {
-        let mut result= Vec::with_capacity(MIN_SIZE);
-        result.extend_from_slice(data.relying_party_id_hash.as_slice());
-
-        let mut flags = 0u8;
-        if data.user_present {
-            flags |= 1;
-        }
-        if data.user_verified {
-            flags |= 1 << 2;
-        }
-        // todo: for now we always have the Attested Credential Data present, and never the extensions
-        flags |= 1 << 6;
-        result.push(flags);
-        result.extend(data.sign_count.to_be_bytes());
-        Box::from(result)
-    }
-}
-
 fn to_map(value: &Value) -> Result<HashMap<&str, &Value>, anyhow::Error> {
     value
         .as_map()
@@ -174,6 +195,7 @@ mod tests {
     use base64::engine::general_purpose::STANDARD_NO_PAD;
     use base64::Engine;
     use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
 
     const ATTESTATION: &str = "
     o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViUSZYN5YgOjGh0NBcPZHZgW4/krrmihjLHmVzzuoMdl2NdAAAAA
@@ -187,7 +209,7 @@ mod tests {
             .filter(|b| !b" \n".contains(b))
             .collect::<Vec<_>>();
         let attestation = STANDARD_NO_PAD.decode(attestation)?;
-        let decoded = AttestationObject::try_from(attestation.as_slice())?;
+        let decoded = AttestationObject::from_cbor(attestation.as_slice())?;
 
         assert_eq!(decoded.format, "none");
         assert_eq!(0, decoded.attestation_statement.len());
@@ -209,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_invalid_input() -> anyhow::Result<()> {
-        let result = AttestationObject::try_from(b"foobar".as_slice());
+        let result = AttestationObject::from_cbor(b"foobar".as_slice());
         let result = result.unwrap_err();
         let result = result.downcast_ref::<WebauthnError>().unwrap();
         assert!(matches!(result, WebauthnError::InvalidInput { .. }));
@@ -219,13 +241,30 @@ mod tests {
     #[test]
     fn test_authenticator_data_roundtrip() -> anyhow::Result<()> {
         let ad = &AuthenticatorData::new(Sha256::digest("localhost").to_vec(), true, true, 0);
-        let bytes: Box<[u8]> = ad.into();
-        assert_eq!(ad, &AuthenticatorData::try_from(bytes.as_ref())?);
+        assert_eq!(
+            ad,
+            &AuthenticatorData::try_from(ad.to_binary_format().as_ref())?
+        );
 
-        let ad = &AuthenticatorData::new(Sha256::digest("sausage.com").to_vec(), false, false, 4247);
-        let bytes: Box<[u8]> = ad.into();
-        assert_eq!(ad, &AuthenticatorData::try_from(bytes.as_ref())?);
+        let ad =
+            &AuthenticatorData::new(Sha256::digest("sausage.com").to_vec(), false, false, 4247);
+        assert_eq!(
+            ad,
+            &AuthenticatorData::try_from(ad.to_binary_format().as_ref())?
+        );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_attestation_object_roundtrip() -> anyhow::Result<()> {
+        let ad = AuthenticatorData::new(Sha256::digest("localhost").to_vec(), true, true, 0);
+
+        let attestation = AttestationObject::new("none".to_string(), HashMap::new(), ad);
+
+        let cbor = attestation.to_cbor();
+
+        assert_eq!(attestation, AttestationObject::from_cbor(cbor.as_ref())?);
         Ok(())
     }
 }

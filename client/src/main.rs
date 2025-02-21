@@ -4,11 +4,10 @@ use base64::Engine;
 use p256::ecdsa::{SigningKey, VerifyingKey};
 use p256::elliptic_curve::{NonZeroScalar, PrimeField};
 use p256::{FieldBytes, NistP256, Scalar};
-use rand::rngs::OsRng;
-use rand::{RngCore, TryRngCore};
+use rand::{RngCore};
 use reqwest::blocking::ClientBuilder;
 
-use idelephant_webauthn::{AttestationObject, AuthenticatorAttestationResponse, ClientData, RegisterPublicKeyCredential};
+use idelephant_webauthn::{ClientData, RegisterPublicKeyCredential};
 use serde_json::Value;
 
 const BASE: &str = "http://localhost:3000";
@@ -26,10 +25,10 @@ fn main() -> Result<()> {
 
     let identity = TestIdentity::new();
 
-    let value: Value = make_register_finish_request(&challenge, BASE, &identity).into();
+    //let value = make_register_finish_request(&challenge, BASE, &identity);
     let response = &client
         .get(format!("{BASE}/register-finish"))
-        .json(&value)
+//        .json(&value)
         .send()?
         .json::<Value>()?;
 
@@ -43,15 +42,16 @@ fn make_register_finish_request(
 ) -> RegisterPublicKeyCredential {
 
     let client_data = ClientData::new("webauthn.request", challenge.clone(), origin, false);
-    let response = AuthenticatorAttestationResponse::new(
-        identity.get_verifying_key().to_sec1_bytes().to_vec(),
-        -7,
-        AttestationObject{}
-        client_data
-    );
+    // let response = AuthenticatorAttestationResponse::new(
+    //     identity.get_verifying_key().to_sec1_bytes().to_vec(),
+    //     -7,
+    //     AttestationObject{}
+    //     client_data
+    // );
     let id = rand::random::<[u8; 32]>().as_ref();
-    RegisterPublicKeyCredential::new(id, response)
-}
+    // RegisterPublicKeyCredential::new(id, response)
+    todo!()
+ }
 
 fn get_challenge(value: &Value) -> Result<Vec<u8>> {
     let challenge = value
@@ -71,8 +71,6 @@ struct TestIdentity {
 
 impl TestIdentity {
     fn new() -> Self {
-        let rng = OsRng.unwrap_err();
-        let mut rng = rand::rng();
         TestIdentity {
             email: make_random_email(),
             signing_key: make_random_signing_key(),

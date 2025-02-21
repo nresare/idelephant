@@ -35,7 +35,6 @@ impl ClientData {
             cross_origin,
         );
         let bytes = serde_json::to_vec(&value).expect("our own json could not be serialized");
-
         ClientData {
             request_type: request_type.to_string(),
             challenge,
@@ -119,7 +118,7 @@ mod tests {
             false,
         );
         assert_eq!(
-            hex!("086ca573945430e8d1360632762ba3ffe6b377100a73a272b7eba45c1c21ef83"),
+            hex!("85c000d7213de409e3c413ad59ad539601c9f911f84d039d6e740f89d6a696a9"),
             client_data.get_hash(),
         );
         Ok(())

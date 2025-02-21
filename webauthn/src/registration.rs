@@ -149,7 +149,7 @@ fn make_register_response(
         public_key: STANDARD_NO_PAD.decode(vw.str("publicKey")?)?,
         public_key_algorithm: vw.num("publicKeyAlgorithm")?,
         // TODO: uncomment this when we add the attestation validation stuff
-        attestation: AttestationObject::try_from(attestation.as_slice())?,
+        attestation: AttestationObject::from_cbor(attestation.as_slice())?,
         client_data: ClientData::try_from(client_json.as_ref())?,
         //authenticator_data: STANDARD_NO_PAD.decode(vw.str("authenticatorData")?)?,
     })
