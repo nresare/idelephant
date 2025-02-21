@@ -71,6 +71,7 @@ impl TryFrom<&[u8]> for AttestationObject {
     }
 }
 
+const AUTH_DATA_MIN_SIZE: usize = 32 + 1 + 4;
 trait Invalid<T> {
     fn invalid(self, detail: &'static str) -> Result<T, WebauthnError>;
 }
@@ -114,9 +115,9 @@ impl TryFrom<&[u8]> for AuthenticatorData {
     type Error = anyhow::Error;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        if bytes.len() < MIN_SIZE {
+        if bytes.len() < AUTH_DATA_MIN_SIZE {
             return Err(anyhow!(
-                "Invalid AuthenticatorData length, < {MIN_SIZE} bytes"
+                "Invalid AuthenticatorData length, < {AUTH_DATA_MIN_SIZE} bytes"
             ));
         }
         let relying_party_id_hash = bytes[..32].to_vec();
