@@ -8,6 +8,7 @@ use rand::rngs::OsRng;
 use rand::{RngCore, TryRngCore};
 use reqwest::blocking::ClientBuilder;
 
+use idelephant_webauthn::{AttestationObject, AuthenticatorAttestationResponse, ClientData, RegisterPublicKeyCredential};
 use serde_json::Value;
 
 const BASE: &str = "http://localhost:3000";
@@ -23,18 +24,43 @@ fn main() -> Result<()> {
             .context("Could not parse response as json")?,
     )?;
 
+    let identity = TestIdentity::new();
+
+    let value: Value = make_register_finish_request(&challenge, BASE, &identity).into();
+    let response = &client
+        .get(format!("{BASE}/register-finish"))
+        .json(&value)
+        .send()?
+        .json::<Value>()?;
+
     Ok(())
 }
 
+fn make_register_finish_request(
+    challenge: &Vec<u8>,
+    origin: &str,
+    identity: &TestIdentity,
+) -> RegisterPublicKeyCredential {
+
+    let client_data = ClientData::new("webauthn.request", challenge.clone(), origin, false);
+    let response = AuthenticatorAttestationResponse::new(
+        identity.get_verifying_key().to_sec1_bytes().to_vec(),
+        -7,
+        AttestationObject{}
+        client_data
+    );
+    let id = rand::random::<[u8; 32]>().as_ref();
+    RegisterPublicKeyCredential::new(id, response)
+}
+
 fn get_challenge(value: &Value) -> Result<Vec<u8>> {
+    let challenge = value
+        .get("challenge")
+        .context("field 'challenge' missing")?
+        .as_str()
+        .context("field 'challenge' not a string")?;
     STANDARD_NO_PAD
-        .decode(
-            value
-                .get("challenge")
-                .context("field 'challenge' missing")?
-                .as_str()
-                .context("field 'challenge' not a string")?,
-        )
+        .decode(challenge)
         .context("field 'challenge' not valid base64")
 }
 
@@ -57,7 +83,9 @@ impl TestIdentity {
         &self.signing_key
     }
 
-    fn get_verifying_key(&self) -> &VerifyingKey {}
+    fn get_verifying_key(&self) -> &VerifyingKey {
+        self.signing_key.as_ref()
+    }
 }
 
 fn make_random_email() -> String {

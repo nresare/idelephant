@@ -3,22 +3,38 @@ use anyhow::{anyhow, Context};
 use ciborium::Value;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct AttestationObject {
     pub(crate) format: String,
     pub attestation_statement: HashMap<String, String>,
     pub auth_data: AuthenticatorData,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct AuthenticatorData {
-    pub relaying_party_id_hash: Vec<u8>,
+    pub relying_party_id_hash: Vec<u8>,
     pub user_present: bool,
     pub user_verified: bool,
     pub sign_count: u32,
     // todo: deal with the COSE encoded keys. For now we are relying on the SubjectPublicKeyInfo
     // formatted public key as described in https://www.w3.org/TR/webauthn-2/#sctn-public-key-easy
     // attested_credential_data: Option<Vec<u8>>,
+}
+
+impl AuthenticatorData {
+    pub fn new(
+        relying_party_id_hash: Vec<u8>,
+        user_present: bool,
+        user_verified: bool,
+        sign_count: u32,
+    ) -> Self {
+        AuthenticatorData {
+            relying_party_id_hash,
+            user_present,
+            user_verified,
+            sign_count,
+        }
+    }
 }
 
 impl TryFrom<&[u8]> for AttestationObject {
@@ -103,7 +119,7 @@ impl TryFrom<&[u8]> for AuthenticatorData {
                 "Invalid AuthenticatorData length, < {MIN_SIZE} bytes"
             ));
         }
-        let relaying_party_id_hash = bytes[..32].to_vec();
+        let relying_party_id_hash = bytes[..32].to_vec();
         let flags = bytes[32];
         let sign_count = u32::from_be_bytes(
             bytes[33..37]
@@ -111,13 +127,33 @@ impl TryFrom<&[u8]> for AuthenticatorData {
                 .context("Invalid AuthenticatorData sign_count value")?,
         );
         let user_present = flags & 1 != 0;
-        let user_verified = flags & 1 << 2 != 0;
+        let user_verified = flags & (1 << 2) != 0;
         Ok(AuthenticatorData {
-            relaying_party_id_hash,
+            relying_party_id_hash,
             user_present,
             user_verified,
             sign_count,
         })
+    }
+}
+
+impl From<&AuthenticatorData> for Box<[u8]> {
+    fn from(data: &AuthenticatorData) -> Box<[u8]> {
+        let mut result= Vec::with_capacity(MIN_SIZE);
+        result.extend_from_slice(data.relying_party_id_hash.as_slice());
+
+        let mut flags = 0u8;
+        if data.user_present {
+            flags |= 1;
+        }
+        if data.user_verified {
+            flags |= 1 << 2;
+        }
+        // todo: for now we always have the Attested Credential Data present, and never the extensions
+        flags |= 1 << 6;
+        result.push(flags);
+        result.extend(data.sign_count.to_be_bytes());
+        Box::from(result)
     }
 }
 
@@ -132,7 +168,7 @@ fn to_map(value: &Value) -> Result<HashMap<&str, &Value>, anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
-    use crate::attestation::AttestationObject;
+    use crate::attestation::{AttestationObject, AuthenticatorData};
     use crate::WebauthnError;
     use base64::engine::general_purpose::STANDARD_NO_PAD;
     use base64::Engine;
@@ -161,7 +197,7 @@ mod tests {
         };
         assert_eq!(
             origin_sha256.as_slice(),
-            decoded.auth_data.relaying_party_id_hash
+            decoded.auth_data.relying_party_id_hash
         );
         assert_eq!(0, decoded.auth_data.sign_count);
         assert!(decoded.auth_data.user_present);
@@ -176,6 +212,19 @@ mod tests {
         let result = result.unwrap_err();
         let result = result.downcast_ref::<WebauthnError>().unwrap();
         assert!(matches!(result, WebauthnError::InvalidInput { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn test_authenticator_data_roundtrip() -> anyhow::Result<()> {
+        let ad = &AuthenticatorData::new(Sha256::digest("localhost").to_vec(), true, true, 0);
+        let bytes: Box<[u8]> = ad.into();
+        assert_eq!(ad, &AuthenticatorData::try_from(bytes.as_ref())?);
+
+        let ad = &AuthenticatorData::new(Sha256::digest("sausage.com").to_vec(), false, false, 4247);
+        let bytes: Box<[u8]> = ad.into();
+        assert_eq!(ad, &AuthenticatorData::try_from(bytes.as_ref())?);
+
         Ok(())
     }
 }

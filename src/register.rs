@@ -10,7 +10,7 @@ use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
 use chrono::Utc;
-use idelephant_webauthn::PublicKeyCredentialRegister;
+use idelephant_webauthn::RegisterPublicKeyCredential;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::str;
@@ -67,7 +67,7 @@ pub(super) async fn register_finish(
     State(persistence_service): State<PersistenceService>,
     Json(credential): Json<Value>,
 ) -> Result<(), IdentityError> {
-    let credential: PublicKeyCredentialRegister = (&credential).try_into()?;
+    let credential: RegisterPublicKeyCredential = (&credential).try_into()?;
 
     let Some(id): Option<String> = session.get(REGISTERING_ID_KEY).await? else {
         return Err(IdentityError::Anyhow(anyhow!(

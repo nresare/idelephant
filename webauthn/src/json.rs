@@ -21,7 +21,6 @@ impl<'a> ValueWrapper<'a> {
     }
 
     // remove the cfg(test) when we re-introduce cross-origin to the using code base
-    #[cfg(test)]
     pub fn bool(&self, key: &str) -> Result<bool, anyhow::Error> {
         match &self.value[key] {
             Value::Bool(b) => Ok(*b),
