@@ -4,54 +4,61 @@ use base64::Engine;
 use p256::ecdsa::{SigningKey, VerifyingKey};
 use p256::elliptic_curve::{NonZeroScalar, PrimeField};
 use p256::{FieldBytes, NistP256, Scalar};
-use rand::{RngCore};
+use rand::RngCore;
 use reqwest::blocking::ClientBuilder;
 
-use idelephant_webauthn::{ClientData, RegisterPublicKeyCredential};
-use serde_json::Value;
+use idelephant_webauthn::{
+    AttestationObject, AuthenticatorAttestationResponse, AuthenticatorData, ClientData,
+    RegisterPublicKeyCredential,
+};
+use serde_json::{json, Value};
 
 const BASE: &str = "http://localhost:3000";
 
 fn main() -> Result<()> {
     let client = ClientBuilder::new().cookie_store(true).build()?;
+    let identity = TestIdentity::new();
 
     let challenge = get_challenge(
         &client
-            .get(format!("{BASE}/register-start"))
+            .post(format!("{BASE}/register-start"))
+            .header("Content-Type", "application/json")
+            .json(&json!({"email": identity.email}))
             .send()?
-            .json::<Value>()
-            .context("Could not parse response as json")?,
+            .json()?,
     )?;
 
     let identity = TestIdentity::new();
 
-    //let value = make_register_finish_request(&challenge, BASE, &identity);
+    let value = &make_register_finish_request(&challenge, BASE, &identity);
+
     let response = &client
-        .get(format!("{BASE}/register-finish"))
-//        .json(&value)
-        .send()?
-        .json::<Value>()?;
+        .post(format!("{BASE}/register-finish"))
+        .header("Content-Type", "application/json")
+        .json(&value.json())
+        .send()?;
+    dbg!(response.status());
 
     Ok(())
 }
 
 fn make_register_finish_request(
-    challenge: &Vec<u8>,
+    challenge: &[u8],
     origin: &str,
     identity: &TestIdentity,
 ) -> RegisterPublicKeyCredential {
+    let client_data = ClientData::new("webauthn.create", challenge.to_vec(), origin, false);
+    let authenticator_data = AuthenticatorData::new("localhost", true, false, 0);
 
-    let client_data = ClientData::new("webauthn.request", challenge.clone(), origin, false);
-    // let response = AuthenticatorAttestationResponse::new(
-    //     identity.get_verifying_key().to_sec1_bytes().to_vec(),
-    //     -7,
-    //     AttestationObject{}
-    //     client_data
-    // );
-    let id = rand::random::<[u8; 32]>().as_ref();
-    // RegisterPublicKeyCredential::new(id, response)
-    todo!()
- }
+    let response = AuthenticatorAttestationResponse::new(
+        identity.get_verifying_key().to_sec1_bytes().to_vec(),
+        -7,
+        AttestationObject::new_none(authenticator_data),
+        client_data,
+    );
+    let id = rand::random::<[u8; 32]>();
+    RegisterPublicKeyCredential::new(id.as_ref(), response)
+}
 
 fn get_challenge(value: &Value) -> Result<Vec<u8>> {
     let challenge = value
@@ -77,9 +84,9 @@ impl TestIdentity {
         }
     }
 
-    fn get_signing_key(&self) -> &SigningKey {
-        &self.signing_key
-    }
+    // fn get_signing_key(&self) -> &SigningKey {
+    //     &self.signing_key
+    // }
 
     fn get_verifying_key(&self) -> &VerifyingKey {
         self.signing_key.as_ref()

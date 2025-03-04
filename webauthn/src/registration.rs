@@ -5,7 +5,7 @@ use anyhow::anyhow;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use p256::ecdsa::signature::digest::Digest;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::Sha256;
 
 pub struct RegisterPublicKeyCredential {
@@ -28,16 +28,18 @@ impl RegisterPublicKeyCredential {
     pub fn response(&self) -> &AuthenticatorAttestationResponse {
         &self.response
     }
+
+    pub fn json(&self) -> Value {
+        json!({
+            "id": URL_SAFE_NO_PAD.encode(&self.id),
+            "rawId": STANDARD_NO_PAD.encode(&self.id),
+            "response": self.response.json(),
+        })
 }
 
-impl From<&RegisterPublicKeyCredential> for Value {
-    fn from(input: &RegisterPublicKeyCredential) -> Self {
-        let mut top = serde_json::Map::new();
-        top.insert("id".into(), STANDARD_NO_PAD.encode(&input.id).into());
-        top.insert("rawId".into(), URL_SAFE_NO_PAD.encode(&input.id).into());
-        Value::Object(top)
-    }
 }
+
+
 
 pub struct AuthenticatorAttestationResponse {
     pub public_key: Vec<u8>,
@@ -60,6 +62,17 @@ impl AuthenticatorAttestationResponse {
             attestation,
             client_data,
         }
+    }
+
+    pub fn json(&self) -> Value {
+        let client_data: Vec<u8> = self.client_data().into();
+
+        json!( {
+            "publicKey": STANDARD_NO_PAD.encode(&self.public_key),
+            "publicKeyAlgorithm": self.public_key_algorithm,
+            "attestationObject": STANDARD_NO_PAD.encode(self.attestation.to_cbor()),
+            "clientDataJSON": STANDARD_NO_PAD.encode(client_data),
+        })
     }
 
     pub fn client_data(&self) -> &ClientData {

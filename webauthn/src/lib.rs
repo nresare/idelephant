@@ -6,6 +6,7 @@ mod json;
 mod registration;
 
 pub use self::attestation::AttestationObject;
+pub use self::attestation::AuthenticatorData;
 pub use self::client_data::ClientData;
 pub use self::registration::AuthenticatorAttestationResponse;
 pub use self::registration::RegisterPublicKeyCredential;
@@ -74,8 +75,9 @@ impl PublicKeyCredentialAuthenticate {
 
 fn get_id(value: &Value) -> Result<Vec<u8>, anyhow::Error> {
     let vw = ValueWrapper::new(value, "credential");
+    let id = vw.str("id")?;
     let id = URL_SAFE_NO_PAD
-        .decode(vw.str("id")?)
+        .decode(id)
         .context("Failed to parse id")?;
     let raw_id = STANDARD_NO_PAD.decode(vw.str("rawId")?)?;
 
@@ -102,7 +104,7 @@ fn make_auth_response(value: &Value) -> Result<AuthenticatorAssertionResponse, a
 mod tests {
     use super::PublicKeyCredentialAuthenticate;
     use crate::registration::RegisterPublicKeyCredential;
-    use base64::engine::general_purpose::STANDARD_NO_PAD;
+    use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
     use base64::Engine;
     use serde_json::{from_str, Value};
 

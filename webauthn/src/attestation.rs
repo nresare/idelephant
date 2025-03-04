@@ -1,6 +1,7 @@
 use crate::WebauthnError;
 use anyhow::{anyhow, Context};
 use ciborium::{cbor, into_writer, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]
@@ -11,14 +12,12 @@ pub struct AttestationObject {
 }
 
 impl AttestationObject {
-    pub fn new(
-        format: String,
-        attestation_statement: HashMap<String, String>,
+    pub fn new_none(
         auth_data: AuthenticatorData,
     ) -> Self {
         AttestationObject {
-            format,
-            attestation_statement,
+            format: "none".to_string(),
+            attestation_statement: HashMap::new(),
             auth_data,
         }
     }
@@ -80,13 +79,13 @@ pub struct AuthenticatorData {
 
 impl AuthenticatorData {
     pub fn new(
-        relying_party_id_hash: Vec<u8>,
+        relying_party_id: &str,
         user_present: bool,
         user_verified: bool,
         sign_count: u32,
     ) -> Self {
         AuthenticatorData {
-            relying_party_id_hash,
+            relying_party_id_hash: Sha256::digest(relying_party_id).to_vec(),
             user_present,
             user_verified,
             sign_count,
@@ -195,7 +194,6 @@ mod tests {
     use base64::engine::general_purpose::STANDARD_NO_PAD;
     use base64::Engine;
     use sha2::{Digest, Sha256};
-    use std::collections::HashMap;
 
     const ATTESTATION: &str = "
     o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViUSZYN5YgOjGh0NBcPZHZgW4/krrmihjLHmVzzuoMdl2NdAAAAA
@@ -213,13 +211,8 @@ mod tests {
 
         assert_eq!(decoded.format, "none");
         assert_eq!(0, decoded.attestation_statement.len());
-        let origin_sha256 = {
-            let mut hasher = Sha256::new();
-            hasher.update("localhost");
-            hasher.finalize()
-        };
         assert_eq!(
-            origin_sha256.as_slice(),
+            Sha256::digest("localhost").as_slice(),
             decoded.auth_data.relying_party_id_hash
         );
         assert_eq!(0, decoded.auth_data.sign_count);
@@ -240,14 +233,14 @@ mod tests {
 
     #[test]
     fn test_authenticator_data_roundtrip() -> anyhow::Result<()> {
-        let ad = &AuthenticatorData::new(Sha256::digest("localhost").to_vec(), true, true, 0);
+        let ad = &AuthenticatorData::new("localhost", true, true, 0);
         assert_eq!(
             ad,
             &AuthenticatorData::try_from(ad.to_binary_format().as_ref())?
         );
 
         let ad =
-            &AuthenticatorData::new(Sha256::digest("sausage.com").to_vec(), false, false, 4247);
+            &AuthenticatorData::new("sausage.com", false, false, 4247);
         assert_eq!(
             ad,
             &AuthenticatorData::try_from(ad.to_binary_format().as_ref())?
@@ -258,9 +251,9 @@ mod tests {
 
     #[test]
     fn test_attestation_object_roundtrip() -> anyhow::Result<()> {
-        let ad = AuthenticatorData::new(Sha256::digest("localhost").to_vec(), true, true, 0);
+        let ad = AuthenticatorData::new("localhost", true, true, 0);
 
-        let attestation = AttestationObject::new("none".to_string(), HashMap::new(), ad);
+        let attestation = AttestationObject::new_none(ad);
 
         let cbor = attestation.to_cbor();
 
