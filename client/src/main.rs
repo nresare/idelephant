@@ -1,16 +1,13 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
 use p256::ecdsa::{SigningKey, VerifyingKey};
 use p256::elliptic_curve::{NonZeroScalar, PrimeField};
 use p256::{FieldBytes, NistP256, Scalar};
-use rand::RngCore;
+use rand::{random, RngCore};
 use reqwest::blocking::ClientBuilder;
-
-use idelephant_webauthn::{
-    AttestationObject, AuthenticatorAttestationResponse, AuthenticatorData, ClientData,
-    RegisterPublicKeyCredential,
-};
+use reqwest::blocking::Client;
+use idelephant_webauthn::{AttestationObject, AuthenticatorAttestationResponse, AuthenticatorData, ClientData, PublicKeyCredentialAuthenticate, RegisterPublicKeyCredential};
 use serde_json::{json, Value};
 
 const BASE: &str = "http://localhost:3000";
@@ -19,26 +16,50 @@ fn main() -> Result<()> {
     let client = ClientBuilder::new().cookie_store(true).build()?;
     let identity = TestIdentity::new();
 
+    register_public_key(&client, identity.email.as_str())?;
+
+    authenticate(&client, identity.get_signing_key())?;
+    Ok(())
+}
+
+fn authenticate(client: &Client, signing_key: &SigningKey) -> Result<()> {
+    let challenge = get_challenge(&client
+        .get(format!("{BASE}/auth-start"))
+        .send()?.json()?)?;
+
+    let auth_finish_request = make_auth_finish_request(challenge, signing_key);
+
+    Ok(())
+}
+
+fn make_auth_finish_request(challenge: Vec<u8>, key: &SigningKey) -> PublicKeyCredentialAuthenticate {
+    PublicKeyCredentialAuthenticate::new(challenge,)
+}
+
+fn register_public_key(client: &Client, email: &str) -> Result<()> {
+
+
     let challenge = get_challenge(
         &client
             .post(format!("{BASE}/register-start"))
             .header("Content-Type", "application/json")
-            .json(&json!({"email": identity.email}))
+            .json(&json!({"email": email}))
             .send()?
-            .json()?,
+            .json()?
     )?;
 
     let identity = TestIdentity::new();
+    let identity_id = random::<[u8; 32]>();
 
-    let value = &make_register_finish_request(&challenge, BASE, &identity);
-
-    let response = &client
+    let response = client
         .post(format!("{BASE}/register-finish"))
         .header("Content-Type", "application/json")
-        .json(&value.json())
+        .json(&(&make_register_finish_request(&challenge, BASE, &identity, &identity_id)).json())
         .send()?;
-    dbg!(response.status());
 
+    if !response.status().is_success() {
+        return Err(anyhow!("Failed to register public key, server returned {}: {}", response.status(), response.text()?))
+    }
     Ok(())
 }
 
@@ -46,6 +67,7 @@ fn make_register_finish_request(
     challenge: &[u8],
     origin: &str,
     identity: &TestIdentity,
+    id: &[u8]
 ) -> RegisterPublicKeyCredential {
     let client_data = ClientData::new("webauthn.create", challenge.to_vec(), origin, false);
     let authenticator_data = AuthenticatorData::new("localhost", true, false, 0);
@@ -56,7 +78,6 @@ fn make_register_finish_request(
         AttestationObject::new_none(authenticator_data),
         client_data,
     );
-    let id = rand::random::<[u8; 32]>();
     RegisterPublicKeyCredential::new(id.as_ref(), response)
 }
 
@@ -84,9 +105,9 @@ impl TestIdentity {
         }
     }
 
-    // fn get_signing_key(&self) -> &SigningKey {
-    //     &self.signing_key
-    // }
+    fn get_signing_key(&self) -> &SigningKey {
+        &self.signing_key
+    }
 
     fn get_verifying_key(&self) -> &VerifyingKey {
         self.signing_key.as_ref()

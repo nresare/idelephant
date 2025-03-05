@@ -35,25 +35,17 @@ pub struct PublicKeyCredentialAuthenticate {
     pub response: AuthenticatorAssertionResponse,
 }
 
-pub struct AuthenticatorAssertionResponse {
-    pub client_data: ClientData,
-    pub authenticator_data: Vec<u8>,
-    pub signature: Vec<u8>,
-    pub user_handle: Vec<u8>,
-}
 
-impl TryFrom<&Value> for PublicKeyCredentialAuthenticate {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        Ok(PublicKeyCredentialAuthenticate {
-            id: get_id(value)?,
-            response: make_auth_response(&value["response"])?,
-        })
-    }
-}
 
 impl PublicKeyCredentialAuthenticate {
+
+    pub fn new(id: Vec<u8>, response: AuthenticatorAssertionResponse) -> Self {
+        PublicKeyCredentialAuthenticate {
+            id,
+            response,
+        }
+    }
+
     pub fn verify(&self, public_key: &[u8], challenge: &[u8]) -> Result<(), anyhow::Error> {
         let mut to_verify = self.response.authenticator_data.clone();
         to_verify.extend_from_slice(self.response.client_data.get_hash());
@@ -71,6 +63,14 @@ impl PublicKeyCredentialAuthenticate {
             .context("Signature verification failed")?;
         Ok(())
     }
+
+    fn from_json(value: &Value) -> Result<Self, anyhow::Error> {
+        Ok(PublicKeyCredentialAuthenticate {
+            id: get_id(value)?,
+            response: make_auth_response(&value["response"])?,
+        })
+    }
+
 }
 
 fn get_id(value: &Value) -> Result<Vec<u8>, anyhow::Error> {
@@ -86,6 +86,24 @@ fn get_id(value: &Value) -> Result<Vec<u8>, anyhow::Error> {
     }
     Ok(id)
 }
+
+pub struct AuthenticatorAssertionResponse {
+    pub client_data: ClientData,
+    pub authenticator_data: AuthenticatorData,
+    pub signature: Vec<u8>,
+    pub user_handle: Vec<u8>,
+}
+impl AuthenticatorAssertionResponse {
+    pub fn new(client_data: ClientData, authenticator_data: AuthenticatorData, signature: Vec<u8>, user_handle: Vec<u8>) -> Self {
+        AuthenticatorAssertionResponse{
+            client_data,
+            authenticator_data,
+            signature,
+            user_handle,
+        }
+    }
+}
+
 
 fn make_auth_response(value: &Value) -> Result<AuthenticatorAssertionResponse, anyhow::Error> {
     let vw = ValueWrapper::new(value, "credential.response");
@@ -144,7 +162,7 @@ mod tests {
         ));
         let value: Value = from_str(auth_response)?;
 
-        let credential = PublicKeyCredentialAuthenticate::try_from(&value)?;
+        let credential = PublicKeyCredentialAuthenticate::from_json(&value)?;
         assert_eq!(
             credential.id,
             b"^\xfeJ\xb7\xcc\xb2 \xca\xa8t\x1aNhQ\xcb\xdf"
@@ -170,7 +188,7 @@ mod tests {
             "/tests/sample_auth_response.json",
         ));
         let value: Value = from_str(register_response)?;
-        let credential = PublicKeyCredentialAuthenticate::try_from(&value)?;
+        let credential = PublicKeyCredentialAuthenticate::from_json(&value)?;
 
         let kb = get_key_bytes();
         credential.verify(
