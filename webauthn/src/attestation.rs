@@ -21,25 +21,27 @@ impl AttestationObject {
     }
 
     pub fn from_cbor(data: &[u8]) -> Result<Self, anyhow::Error> {
-        let value: Value = ciborium::from_reader(data)
-            .invalid("Could not parse AttestationObject, wrong CBOR format")?;
-        let m = to_map(&value)
-            .invalid("AttestationObject data could not be read as Map<String, Value>")?;
+        let value: Value = ciborium::from_reader(data).map_err(invalid(
+            "Could not parse AttestationObject, wrong CBOR format",
+        ))?;
+        let m = to_map(&value).map_err(invalid(
+            "AttestationObject data could not be read as Map<String, Value>",
+        ))?;
 
         let format = m
             .get("fmt")
-            .invalid("AttestationObject is missing 'fmt' value")?;
+            .ok_or_else(missing("AttestationObject is missing 'fmt' value"))?;
         let format = format
             .as_text()
-            .invalid("Failed to parse AttestationObject")?
+            .ok_or_else(missing("Failed to parse AttestationObject"))?
             .to_string();
 
         let auth_data = m
             .get("authData")
-            .invalid("AttestationObject is missing 'authData' value")?;
+            .ok_or_else(missing("AttestationObject is missing 'authData' value"))?;
         let auth_data = auth_data
             .as_bytes()
-            .invalid("authData field not bytes")?
+            .ok_or_else(missing("authData field not bytes"))?
             .as_slice();
         let auth_data = AuthenticatorData::try_from(auth_data)?;
 
@@ -110,40 +112,18 @@ impl AuthenticatorData {
 }
 
 const AUTH_DATA_MIN_SIZE: usize = 32 + 1 + 4;
-trait Invalid<T> {
-    fn invalid(self, detail: &'static str) -> Result<T, WebauthnError>;
-}
 
-impl<T, E> Invalid<T> for Result<T, E>
-where
-    E: Into<anyhow::Error>,
-{
-    fn invalid(self, detail: &'static str) -> Result<T, WebauthnError> {
-        match self {
-            Ok(value) => Ok(value),
-            Err(err) => {
-                let detail = detail.to_string();
-                Err(WebauthnError::InvalidInput {
-                    detail,
-                    source: Some(err.into()),
-                })
-            }
-        }
+fn invalid<E: Into<anyhow::Error>>(detail: &'static str) -> impl FnOnce(E) -> WebauthnError {
+    |e| WebauthnError::InvalidInput {
+        detail: detail.to_string(),
+        source: Some(e.into()),
     }
 }
 
-impl<T> Invalid<T> for Option<T> {
-    fn invalid(self, detail: &'static str) -> Result<T, WebauthnError> {
-        match self {
-            Some(value) => Ok(value),
-            None => {
-                let detail = detail.to_string();
-                Err(WebauthnError::InvalidInput {
-                    detail,
-                    source: None,
-                })
-            }
-        }
+fn missing(detail: &'static str) -> impl FnOnce() -> WebauthnError {
+    || WebauthnError::InvalidInput {
+        detail: detail.to_string(),
+        source: None,
     }
 }
 
