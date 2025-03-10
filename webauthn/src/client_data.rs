@@ -11,36 +11,75 @@ pub struct ClientData {
     pub origin: String,
     // I don't know the use case for cross_origin. If you need it, please let me know your
     // use-case, and I'll re-introduce it and add some relevant test cases.
-    #[cfg(test)]
     pub cross_origin: bool,
     hash: Vec<u8>,
 }
 
 impl ClientData {
-    pub(crate) fn get_sha256(&self) -> &[u8] {
-        &self.hash
+    pub fn get_hash(&self) -> &[u8] {
+        self.hash.as_slice()
+    }
+
+    /// Construct a new ClientData object with a hash value that matches the output of
+    /// the conversion into Vec<u8>
+    pub fn new(
+        request_type: impl ToString,
+        challenge: Vec<u8>,
+        origin: impl ToString,
+        cross_origin: bool,
+    ) -> Self {
+        let value = make_value(
+            &request_type.to_string(),
+            &challenge,
+            &origin.to_string(),
+            cross_origin,
+        );
+        let bytes = serde_json::to_vec(&value).expect("our own json could not be serialized");
+        ClientData {
+            request_type: request_type.to_string(),
+            challenge,
+            origin: origin.to_string(),
+            cross_origin,
+            hash: Sha256::digest(bytes.as_slice()).to_vec(),
+        }
     }
 }
 
-fn sha256(bytes: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    Vec::from(hasher.finalize().as_slice())
+fn make_value(request_type: &str, challenge: &[u8], origin: &str, cross_origin: bool) -> Value {
+    let mut top = serde_json::Map::new();
+    top.insert("type".to_string(), request_type.into());
+    top.insert(
+        "challenge".to_string(),
+        URL_SAFE_NO_PAD.encode(challenge).into(),
+    );
+    top.insert("origin".to_string(), origin.into());
+    top.insert("crossOrigin".to_string(), cross_origin.into());
+    Value::Object(top)
+}
+
+impl From<&ClientData> for Vec<u8> {
+    fn from(client_data: &ClientData) -> Vec<u8> {
+        let value = make_value(
+            client_data.request_type.as_str(),
+            &client_data.challenge,
+            client_data.origin.as_str(),
+            client_data.cross_origin,
+        );
+        serde_json::to_vec(&value).expect("our own json could not be serialized")
+    }
 }
 
 impl TryFrom<&[u8]> for ClientData {
     type Error = anyhow::Error;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        let hash = sha256(value);
+        let hash = Sha256::digest(value).to_vec();
         let value: Value = serde_json::from_str(from_utf8(value)?)?;
         let vw = ValueWrapper::new(&value, "credential.response.clientDataJSON");
         Ok(ClientData {
             request_type: vw.str("type")?.to_string(),
             challenge: URL_SAFE_NO_PAD.decode(vw.str("challenge")?)?,
             origin: vw.str("origin")?.to_string(),
-            // remove this when we have an actual use case for this
-            #[cfg(test)]
             cross_origin: vw.bool("crossOrigin")?,
             hash,
         })
@@ -58,12 +97,43 @@ fn from_utf8(mut slice: &[u8]) -> Result<&str, anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::from_utf8;
+    use super::{from_utf8, ClientData};
+    use hex_literal::hex;
 
     #[test]
     fn test_from_utf8() -> anyhow::Result<()> {
         assert_eq!(from_utf8(b"\xef\xbb\xbfhorse")?, "horse");
         assert_eq!(from_utf8(b"stable")?, "stable");
+        Ok(())
+    }
+
+    const CHALLENGE: &[u8] = &hex!("6871b91729e5e55ca5b4fa5b0828b2915e96");
+
+    #[test]
+    fn test_hash() -> anyhow::Result<()> {
+        let client_data = ClientData::new(
+            "authn.create",
+            CHALLENGE.into(),
+            "http://localhost:3000",
+            false,
+        );
+        assert_eq!(
+            hex!("85c000d7213de409e3c413ad59ad539601c9f911f84d039d6e740f89d6a696a9"),
+            client_data.get_hash(),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_input_gives_correct_hash() -> anyhow::Result<()> {
+        // this input is functionally the same as the data from above
+        const CLIENT_DATA: &[u8] = b"{\"type\":\"webauthn.create\",\"challenge\":\"aHG5Fynl5VyltPpbCCiykV6W\",\"origin\":\"http://localhost:3000\",\"crossOrigin\":false}";
+        let client_data = ClientData::try_from(CLIENT_DATA)?;
+        assert_eq!(client_data.challenge, CHALLENGE);
+        assert_eq!(
+            hex!("b1251b47a98ef5d2f247fcf39794e8f7752559e872f8525a439399a698fe1649"),
+            client_data.get_hash(),
+        );
         Ok(())
     }
 }
