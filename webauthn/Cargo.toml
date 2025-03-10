@@ -12,3 +12,6 @@ ciborium = "0.2.2"
 serde_json = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }
+serde = { version = "1.0.217", features = ["derive"] }
+hex-literal = {workspace = true}
+hex = "0.4.3"

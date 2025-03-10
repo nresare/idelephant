@@ -47,7 +47,8 @@ async fn auth_finish(
             "Could not find challenge in session"
         )));
     };
-    let credential: PublicKeyCredentialAuthenticate = (&credential).try_into()?;
+    let credential: PublicKeyCredentialAuthenticate =
+        PublicKeyCredentialAuthenticate::from_json(&credential)?;
 
     let user_handle = from_utf8(credential.response.user_handle.as_slice()).context(format!(
         "Could not convert user handle bytes {:?} to String",
