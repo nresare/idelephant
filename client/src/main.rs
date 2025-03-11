@@ -1,9 +1,13 @@
 mod auth;
-mod identity;
+mod credential;
 mod register;
 
-use crate::identity::TestIdentity;
+use crate::credential::Credential;
+use auth::authenticate;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
+use base64::Engine;
 use log::info;
+use rand::random;
 use reqwest::blocking::ClientBuilder;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -18,19 +22,26 @@ fn main() -> anyhow::Result<()> {
     info!("Connecting to {BASE}");
 
     let client = ClientBuilder::new().cookie_store(true).build()?;
-    let identity = TestIdentity::new();
 
-    let user_id = register::register_public_key(&client, &identity)?;
+    let credential = Credential::new();
+    let email = make_random_email();
 
-    auth::authenticate(&client, &identity, user_id)?;
+    let user_id = register::register_public_key(&client, &credential, &email)?;
+
+    authenticate(&client, &credential, user_id)?;
     info!("Successfully authenticated using the newly registered key");
     Ok(())
 }
 
+fn make_random_email() -> String {
+    let bytes: [u8; 8] = random();
+    format!("{}@example.com", STANDARD_NO_PAD.encode(bytes))
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::identity::make_random_signing_key;
-    use crate::register::to_spki_bytes;
+    use crate::credential::make_random_signing_key;
+    use crate::credential::to_spki_bytes;
     use anyhow::Context;
     use hex_literal::hex;
     use p256::ecdsa::signature::Verifier;
@@ -71,15 +82,13 @@ mod tests {
     fn verify(key: &[u8], signature: &[u8], data: &[u8]) -> anyhow::Result<()> {
         let key = verifying_key_from_bytes(key).context("Could not parse verifying key")?;
         let signature = Signature::from_der(signature).context("could not parse signature")?;
-        Ok(key.verify(&data, &signature)?)
+        Ok(key.verify(data, &signature)?)
     }
 
     fn verifying_key_from_bytes(bytes: &[u8]) -> anyhow::Result<VerifyingKey> {
         let key = SubjectPublicKeyInfoOwned::try_from(bytes)
             .context("Could not parse public key data as SPKI")?;
-        Ok(
-            VerifyingKey::from_sec1_bytes(key.subject_public_key.as_bytes().unwrap())
-                .context("Could not parse verifying key")?,
-        )
+        VerifyingKey::from_sec1_bytes(key.subject_public_key.as_bytes().unwrap())
+            .context("Could not parse verifying key")
     }
 }

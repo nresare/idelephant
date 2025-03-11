@@ -1,30 +1,22 @@
-use crate::identity::TestIdentity;
+use crate::credential::Credential;
 use anyhow::{anyhow, Context};
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
 use idelephant_webauthn::{
     AuthenticatorAssertionResponse, AuthenticatorData, ClientData, PublicKeyCredentialAuthenticate,
 };
-use p256::ecdsa::signature::Signer;
-use p256::ecdsa::{Signature, SigningKey};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
 use crate::BASE;
 pub fn authenticate(
     client: &Client,
-    identity: &TestIdentity,
+    credential: &Credential,
     user_id: Vec<u8>,
 ) -> anyhow::Result<()> {
     let challenge = get_auth_challenge(&client.get(format!("{BASE}/auth-start")).send()?.json()?)?;
 
-    let auth_finish_request = make_auth_finish_request(
-        challenge,
-        user_id,
-        identity.get_signing_key(),
-        identity.get_credential_id(),
-    )
-    .json();
+    let auth_finish_request = make_auth_finish_request(challenge, user_id, credential).json();
     let response = client
         .post(format!("{BASE}/auth-finish"))
         .json(&auth_finish_request)
@@ -42,8 +34,7 @@ pub fn authenticate(
 fn make_auth_finish_request(
     challenge: Vec<u8>,
     user_id: Vec<u8>,
-    key: &SigningKey,
-    credential_id: &[u8],
+    credential: &Credential,
 ) -> PublicKeyCredentialAuthenticate {
     let auth_data = AuthenticatorData::new("localhost", true, false, 0).to_binary_format();
 
@@ -52,15 +43,13 @@ fn make_auth_finish_request(
     let mut to_sign: Vec<u8> = auth_data.to_vec();
     to_sign.extend_from_slice(client_data.get_hash());
 
-    let signature: Signature = key.sign(to_sign.as_slice());
-
     let response = AuthenticatorAssertionResponse::new(
         client_data,
         auth_data.to_vec(),
-        signature.to_der().to_bytes().to_vec(),
+        credential.sign(to_sign.as_slice()).to_vec(),
         user_id.clone(),
     );
-    PublicKeyCredentialAuthenticate::new(credential_id.to_vec(), response)
+    PublicKeyCredentialAuthenticate::new(credential.id().to_vec(), response)
 }
 
 pub fn get_auth_challenge(value: &Value) -> anyhow::Result<Vec<u8>> {
