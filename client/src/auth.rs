@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::BASE;
 pub fn authenticate(
     client: &Client,
-    credential: &Credential,
+    credential: &mut dyn Credential,
     user_id: Vec<u8>,
 ) -> anyhow::Result<()> {
     let challenge = get_auth_challenge(&client.get(format!("{BASE}/auth-start")).send()?.json()?)?;
@@ -34,7 +34,7 @@ pub fn authenticate(
 fn make_auth_finish_request(
     challenge: Vec<u8>,
     user_id: Vec<u8>,
-    credential: &Credential,
+    credential: &mut dyn Credential,
 ) -> PublicKeyCredentialAuthenticate {
     let auth_data = AuthenticatorData::new("localhost", true, false, 0).to_binary_format();
 

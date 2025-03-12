@@ -19,5 +19,8 @@ spki = { workspace = true }
 sha2 = "0.10.8"
 log = "0.4.25"
 tracing-subscriber = { workspace = true}
+ssh-agent-client-rs = "0.9.1"
+ssh-key = { version = "0.6.7", features = ["crypto"] }
+clap = { version = "4.5.32", features = ["derive"] }
 [dev-dependencies]
 hex-literal = { workspace = true}
