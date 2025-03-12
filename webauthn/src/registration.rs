@@ -39,7 +39,7 @@ impl RegisterPublicKeyCredential {
 }
 
 pub struct AuthenticatorAttestationResponse {
-    pub public_key: Vec<u8>,
+    pub public_key: Box<[u8]>,
     pub public_key_algorithm: i32,
     pub attestation: AttestationObject,
     pub client_data: ClientData,
@@ -48,7 +48,7 @@ pub struct AuthenticatorAttestationResponse {
 
 impl AuthenticatorAttestationResponse {
     pub fn new(
-        public_key: Vec<u8>,
+        public_key: Box<[u8]>,
         public_key_algorithm: i32,
         attestation: AttestationObject,
         client_data: ClientData,
@@ -156,7 +156,9 @@ fn make_register_response(
     let attestation = STANDARD_NO_PAD.decode(vw.str("attestationObject")?)?;
 
     Ok(AuthenticatorAttestationResponse {
-        public_key: STANDARD_NO_PAD.decode(vw.str("publicKey")?)?,
+        public_key: STANDARD_NO_PAD
+            .decode(vw.str("publicKey")?)?
+            .into_boxed_slice(),
         public_key_algorithm: vw.num("publicKeyAlgorithm")?,
         // TODO: uncomment this when we add the attestation validation stuff
         attestation: AttestationObject::from_cbor(attestation.as_slice())?,
