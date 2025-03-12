@@ -13,24 +13,23 @@ members = [
 anyhow = { workspace = true }
 axum = "0.8.1"
 tower = "0.5.2"
-rust-embed = "8.5.0"
-tokio = { version = "1.43.0" }
+rust-embed = "8.6.0"
+tokio = { version = "1.44.0" }
 mime_guess = "2.0.5"
 tower-http = { version = "0.6.2", features = ["trace"] }
-serde = { version = "1.0.217", features = ["derive"] }
-chrono = { version = "0.4.39", features = ["serde"]}
+serde = { version = "1.0.219", features = ["derive"] }
+chrono = { version = "0.4.40", features = ["serde"]}
 tracing = "0.1.41"
 tracing-subscriber = {  workspace = true }
 rand = "0.9.0"
 base64 = { workspace = true }
-surrealdb = { version = "2.2.0", features = ["kv-mem", "kv-surrealkv"] }
+surrealdb = { version = "2.2.1", features = ["kv-mem", "kv-surrealkv"] }
 tower-sessions = "0.14.0"
 tower-sessions-surrealdb-store = "0.6.0"
-time = "0.3.36"
+time = "0.3.39"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 idelephant_webauthn = { path = "webauthn"}
-spki = { workspace = true }
 
 [workspace.dependencies]
 serde_json = { version = "1.0.138", features = ["preserve_order"] }
