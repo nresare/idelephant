@@ -5,7 +5,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
-use surrealdb::engine::local::{Db, SurrealKv};
+use surrealdb::engine::any;
+use surrealdb::engine::any::Any;
 use surrealdb::{RecordId, Surreal};
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
@@ -36,11 +37,12 @@ pub struct Credential {
 
 #[derive(Clone)]
 pub struct PersistenceService {
-    db: Arc<Surreal<Db>>,
+    db: Arc<Surreal<Any>>,
 }
 
-pub async fn make_db(path: &Path) -> Result<Surreal<Db>, IdentityError> {
-    let db = Surreal::new::<SurrealKv>(path).await?;
+pub async fn make_db(path: &Path) -> Result<Surreal<Any>, IdentityError> {
+    let path = format!("surrealkv:{}", path.to_string_lossy());
+    let db = any::connect(path).await?;
     db.use_ns("dev").use_db("identityprovider").await?;
     let _ = db
         .query("DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE")
@@ -49,7 +51,7 @@ pub async fn make_db(path: &Path) -> Result<Surreal<Db>, IdentityError> {
 }
 
 impl PersistenceService {
-    pub fn new(db: Surreal<Db>) -> Self {
+    pub fn new(db: Surreal<Any>) -> Self {
         PersistenceService { db: Arc::new(db) }
     }
 
