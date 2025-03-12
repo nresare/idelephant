@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 pub fn register_public_key(
     client: &Client,
-    identity: &Credential,
+    identity: &mut dyn Credential,
     email: &str,
 ) -> anyhow::Result<Vec<u8>> {
     let (challenge, user_id) = get_register_challenge(
@@ -43,7 +43,7 @@ pub fn register_public_key(
 fn make_register_finish_request(
     challenge: &[u8],
     origin: &str,
-    credential: &Credential,
+    credential: &dyn Credential,
 ) -> RegisterPublicKeyCredential {
     let client_data = ClientData::new("webauthn.create", challenge.to_vec(), origin, false);
     let authenticator_data = AuthenticatorData::new("localhost", true, false, 0);
