@@ -14,7 +14,7 @@ use axum::response::{Html, IntoResponse};
 use axum::routing::{get, Router};
 use embed::StaticFile;
 use std::net::{Ipv6Addr, SocketAddr};
-use surrealdb::engine::local::Db;
+use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
 use time::Duration;
 use tower_http::trace;
@@ -66,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn make_session_layer(db: Surreal<Db>) -> SessionManagerLayer<SurrealSessionStore<Db>> {
+fn make_session_layer(db: Surreal<Any>) -> SessionManagerLayer<SurrealSessionStore<Any>> {
     let session_store = SurrealSessionStore::new(db, "session".to_string());
     SessionManagerLayer::new(session_store)
         .with_expiry(Expiry::OnInactivity(Duration::hours(1)))
