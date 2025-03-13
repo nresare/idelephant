@@ -3,6 +3,7 @@ mod embed;
 mod error;
 mod persistence;
 mod register;
+mod root_setup;
 mod util;
 
 use crate::auth::auth_routes;
@@ -13,7 +14,11 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, Router};
 use embed::StaticFile;
+use idelephant_common::{convert_key, ToBoxedSlice};
+use serde::Deserialize;
+use ssh_key::{HashAlg, PublicKey};
 use std::net::{Ipv6Addr, SocketAddr};
+use std::path::Path as FsPath;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
 use time::Duration;
@@ -40,8 +45,17 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer().compact())
         .init();
 
-    let db = make_db(std::path::Path::new("/tmp/db")).await?;
+    let config: Config =
+        toml::from_str(std::fs::read_to_string(FsPath::new("idelephant.toml"))?.as_str())?;
+
+    let db = make_db(FsPath::new(config.db_path.as_str())).await?;
     let ps = PersistenceService::new(db.clone());
+
+    let key = PublicKey::from_openssh(&config.root_key)?;
+    let spki_bytes = convert_key(&key)?.to_boxed_slice();
+    ps.configure_root_key(key.fingerprint(HashAlg::Sha256).as_bytes(), &spki_bytes)
+        .await?;
+
     let state = AppState { ps: ps.clone() };
 
     let app = Router::new()
@@ -64,6 +78,12 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app.into_make_service()).await?;
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct Config {
+    db_path: String,
+    root_key: String,
 }
 
 fn make_session_layer(db: Surreal<Any>) -> SessionManagerLayer<SurrealSessionStore<Any>> {

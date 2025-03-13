@@ -1,0 +1,4 @@
+root_key = """ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBMOmfeR5oaRJvme4/uFNitESVw\
+dHwACESMqdTSxxIP+UytIBlUU+37/7qyCKkkRWFlvsRyjSQbfnLRE+UZTlH8Y="""
+
+db_path = "/tmp/db"

@@ -1,16 +1,16 @@
 use anyhow::{anyhow, Result};
+use idelephant_common::{convert_key, ToBoxedSlice};
 use p256::ecdsa::signature::{SignatureEncoding, Signer};
-use p256::ecdsa::{Signature, SigningKey};
+use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use p256::elliptic_curve::{NonZeroScalar, PrimeField};
-use p256::pkcs8::der::asn1::BitStringRef;
+use p256::pkcs8::der::asn1::BitString;
+use p256::pkcs8::der::oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
 use p256::pkcs8::ObjectIdentifier;
 use p256::{FieldBytes, NistP256, Scalar};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
-use spki::der::Encode;
 use spki::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 use ssh_agent_client_rs::Client;
-use ssh_key::public::{EcdsaPublicKey, KeyData};
 use ssh_key::Fingerprint;
 use std::env;
 use std::path::Path;
@@ -34,6 +34,10 @@ impl P256Random {
         Self { key, id }
     }
 }
+const P256_ALGORITHM: AlgorithmIdentifier<ObjectIdentifier> = AlgorithmIdentifier {
+    oid: ID_EC_PUBLIC_KEY,
+    parameters: Some(SECP_256_R_1),
+};
 
 impl Credential for P256Random {
     fn sign(&mut self, message: &[u8]) -> Box<[u8]> {
@@ -42,7 +46,7 @@ impl Credential for P256Random {
     }
 
     fn get_public_key_bytes(&self) -> Box<[u8]> {
-        to_spki_bytes(&self.key.as_ref().to_sec1_bytes())
+        make_spki(P256_ALGORITHM, self.key.as_ref()).to_boxed_slice()
     }
 
     fn id(&self) -> &[u8] {
@@ -54,6 +58,7 @@ pub struct SshAgentBackedCredential {
     client: Client,
     key: ssh_key::PublicKey,
     fingerprint: Fingerprint,
+    public_key_bytes: Box<[u8]>,
 }
 
 impl SshAgentBackedCredential {
@@ -65,11 +70,12 @@ impl SshAgentBackedCredential {
             anyhow!("For now we only handle the case when the ssh-agent provides one key")
         })?;
         let fingerprint = key.fingerprint(Default::default());
-
+        let public_key_bytes = convert_key(&key)?.to_boxed_slice();
         Ok(Self {
             client,
             key,
             fingerprint,
+            public_key_bytes,
         })
     }
 }
@@ -86,32 +92,12 @@ impl Credential for SshAgentBackedCredential {
     }
 
     fn get_public_key_bytes(&self) -> Box<[u8]> {
-        let KeyData::Ecdsa(EcdsaPublicKey::NistP256(key)) = self.key.key_data() else {
-            todo!("For now we don't handle any other keys but P256")
-        };
-        to_spki_bytes(&key.to_bytes())
+        self.public_key_bytes.clone()
     }
 
     fn id(&self) -> &[u8] {
         self.fingerprint.as_ref()
     }
-}
-
-fn to_spki_bytes(p256_key_bytes: &[u8]) -> Box<[u8]> {
-    let spki: SubjectPublicKeyInfo<ObjectIdentifier, BitStringRef> = SubjectPublicKeyInfo {
-        algorithm: AlgorithmIdentifier {
-            oid: "1.2.840.10045.2.1"
-                .parse::<ObjectIdentifier>()
-                .expect("Could not parse oid"),
-            parameters: Some(
-                "1.2.840.10045.3.1.7"
-                    .parse::<ObjectIdentifier>()
-                    .expect("Could not parse params"),
-            ),
-        },
-        subject_public_key: BitStringRef::from_bytes(p256_key_bytes).expect("invalid BitString"),
-    };
-    spki.to_der().unwrap().into_boxed_slice()
 }
 
 // Slightly adapted from https://github.com/RustCrypto/traits/blob/master/elliptic-curve/src/scalar/nonzero.rs#L50
@@ -130,16 +116,30 @@ fn make_random_signing_key() -> SigningKey {
     }
 }
 
+fn make_spki(
+    algorithm: AlgorithmIdentifier<ObjectIdentifier>,
+    key: &VerifyingKey,
+) -> SubjectPublicKeyInfo<ObjectIdentifier, BitString> {
+    let subject_public_key = BitString::new(0, key.to_sec1_bytes())
+        .expect("BUG: Could not encode public key into bytes");
+    SubjectPublicKeyInfo {
+        algorithm,
+        subject_public_key,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::credential::{
-        make_random_signing_key, to_spki_bytes, Credential, SshAgentBackedCredential,
+        make_random_signing_key, make_spki, Credential, SshAgentBackedCredential,
     };
     use anyhow::Context;
     use hex_literal::hex;
+    use idelephant_common::ToBoxedSlice;
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
-    use spki::SubjectPublicKeyInfoOwned;
+    use p256::pkcs8::der::oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
+    use spki::{AlgorithmIdentifier, SubjectPublicKeyInfoOwned};
 
     #[test]
     fn test_sign_and_verify() -> anyhow::Result<()> {
@@ -150,8 +150,12 @@ mod tests {
         let message =
             b"ECDSA proves knowledge of a secret number in the context of a single message";
         let signature: Signature = signing_key.sign(message);
+        let algorithm = AlgorithmIdentifier {
+            oid: ID_EC_PUBLIC_KEY,
+            parameters: Some(SECP_256_R_1),
+        };
 
-        let key_bytes = to_spki_bytes(&signing_key.as_ref().to_sec1_bytes());
+        let key_bytes = make_spki(algorithm, signing_key.as_ref()).to_boxed_slice();
         let signature_bytes = signature.to_der().to_bytes();
 
         let verifying_key = verifying_key_from_bytes(&key_bytes)?;

@@ -38,9 +38,12 @@ fn main() -> anyhow::Result<()> {
     };
     let email = make_random_email();
 
-    let user_id = register::register_public_key(&client, credential, &email)?;
-
-    authenticate(&client, credential, user_id)?;
+    if args.agent {
+        authenticate(&client, credential, b"root".to_vec())?;
+    } else {
+        let user_id = register::register_public_key(&client, credential, &email)?;
+        authenticate(&client, credential, user_id)?;
+    }
     info!("Successfully authenticated using the newly registered key");
     Ok(())
 }

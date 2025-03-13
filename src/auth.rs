@@ -11,6 +11,7 @@ use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
 use idelephant_webauthn::PublicKeyCredentialAuthenticate;
 use serde::Serialize;
+use serde::__private::from_utf8_lossy;
 use serde_json::Value;
 use std::str;
 use std::str::from_utf8;
@@ -77,5 +78,9 @@ fn find_key(identity: Identity, credential_id: &[u8]) -> Result<Vec<u8>, Identit
             return Ok(credential.public_key);
         }
     }
-    Err(anyhow!("Could not find key with id for user").into())
+    Err(anyhow!(
+        "Could not find key with id for user {}",
+        from_utf8_lossy(credential_id)
+    )
+    .into())
 }

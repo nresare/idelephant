@@ -65,6 +65,21 @@ impl PersistenceService {
         Ok(result.id.key().to_string())
     }
 
+    pub async fn persist_with_id(
+        &self,
+        id: &str,
+        identity: Identity,
+    ) -> Result<String, IdentityError> {
+        let Some(result): Option<Record> =
+            self.db.create(("identity", id)).content(identity).await?
+        else {
+            return Err(IdentityError::Logic(
+                "db.create succeeded but returned None".to_string(),
+            ));
+        };
+        Ok(result.id.key().to_string())
+    }
+
     pub async fn fetch(&self, id: &str) -> Result<Option<Identity>, IdentityError> {
         Ok(self.db.select(("identity", id)).await?)
     }
@@ -72,6 +87,59 @@ impl PersistenceService {
     pub async fn update(&self, id: &str, identity: Identity) -> Result<bool, IdentityError> {
         let result: Option<Identity> = self.db.update(("identity", id)).content(identity).await?;
         Ok(result.is_some())
+    }
+
+    pub async fn configure_root_key(
+        &self,
+        credential_id: &[u8],
+        key_bytes: &[u8],
+    ) -> Result<(), IdentityError> {
+        let identity: Option<Identity> = self.db.select(("identity", "root")).await?;
+        if let Some(mut identity) = identity {
+            match identity.state {
+                IdentityState::Allocated { .. } => {
+                    return Err(IdentityError::Logic(
+                        "root identity should not have state Allocated".to_string(),
+                    ));
+                }
+                IdentityState::Active { mut credentials } => {
+                    let mut found = false;
+                    for credential in credentials.iter() {
+                        if credential.public_key == key_bytes {
+                            found = true;
+                        }
+                    }
+                    if !found {
+                        credentials.push(Credential {
+                            id: credential_id.to_vec(),
+                            public_key: key_bytes.to_vec(),
+                            public_key_algorithm: -7,
+                            sign_count: 0,
+                        });
+                        identity.state = IdentityState::Active { credentials };
+                        self.update("root", identity).await?;
+                    }
+                }
+            }
+        } else {
+            self.persist_with_id(
+                "root",
+                Identity {
+                    email: "root_user".to_string(),
+                    created: Utc::now(),
+                    state: IdentityState::Active {
+                        credentials: vec![Credential {
+                            id: credential_id.to_vec(),
+                            public_key: key_bytes.to_vec(),
+                            public_key_algorithm: -7,
+                            sign_count: 0,
+                        }],
+                    },
+                },
+            )
+            .await?;
+        }
+        Ok(())
     }
 }
 
