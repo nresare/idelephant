@@ -12,5 +12,7 @@ ciborium = "0.2.2"
 serde_json = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }
-hex-literal = {workspace = true}
+
+[dev-dependencies]
 hex = "0.4.3"
+hex-literal = {workspace = true}

@@ -1,0 +1,14 @@
+[package]
+name = "idelephant_common"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = {workspace = true}
+# Keep this in sync with the spki version
+const-oid = { version = "0.9.6", features = ["db"] }
+spki = {workspace = true}
+ssh-key = "0.6.7"
+
+[dev-dependencies]
+hex-literal = { workspace = true}

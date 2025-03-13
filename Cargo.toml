@@ -6,10 +6,12 @@ edition = "2021"
 [workspace]
 members = [
     "client",
+    "common",
     "webauthn",
 ]
 
 [dependencies]
+idelephant_common = {path = "common"}
 anyhow = { workspace = true }
 axum = "0.8.1"
 tower = "0.5.2"
@@ -30,6 +32,8 @@ time = "0.3.39"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 idelephant_webauthn = { path = "webauthn"}
+toml = "0.8.20"
+ssh-key = "0.6.7"
 
 [workspace.dependencies]
 serde_json = { version = "1.0.138", features = ["preserve_order"] }
@@ -44,4 +48,4 @@ tracing-subscriber = {  version = "0.3.19", features = ["env-filter"] }
 
 [dev-dependencies]
 tempfile = "3.15.0"
-
+hex-literal = {workspace = true}
