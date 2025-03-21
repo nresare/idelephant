@@ -5,6 +5,7 @@ mod persistence;
 mod register;
 mod root_setup;
 mod util;
+mod invite;
 
 use crate::auth::auth_routes;
 use crate::persistence::{make_db, PersistenceService};
