@@ -13,48 +13,92 @@ use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, Router};
+use clap::Parser;
 use embed::StaticFile;
 use idelephant_common::{convert_key, ToBoxedSlice};
 use serde::Deserialize;
 use ssh_key::{HashAlg, PublicKey};
-use std::net::{Ipv6Addr, SocketAddr};
+use std::io;
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::path::Path as FsPath;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
+use thiserror::Error;
 use time::Duration;
 use tower_http::trace;
 use tower_http::trace::TraceLayer;
 use tower_sessions::{Expiry, SessionManagerLayer};
 use tower_sessions_surrealdb_store::SurrealSessionStore;
-use tracing::info;
 use tracing::Level;
+use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
+#[derive(Parser)]
+struct Cli {
+    #[arg(name = "config-file", default_value = "/etc/idelephant.toml")]
+    config_path: String,
+}
+
+#[derive(Error, Debug)]
+enum Fatal {
+    #[error("Could not read '{0}': {1}")]
+    ReadConfigFile(String, anyhow::Error),
+    #[error("unknown fatal error: {0}")]
+    Other(#[from] anyhow::Error),
+    #[error("Could not configure database: {0}")]
+    DbSetup(anyhow::Error),
+    #[error("Could not parser admin key: {0}")]
+    AdminKey(anyhow::Error),
+    #[error("Could not begin to listen to {0}: {1}")]
+    Listen(SocketAddr, io::Error),
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // tracing_subscriber::fmt()
-    //     .with_target(false)
-    //     .compact()
-    //     .init();
     tracing_subscriber::registry()
         .with(EnvFilter::new(
             "idelephant=info,tower_http=info,axum::rejection=trace",
         ))
         .with(tracing_subscriber::fmt::layer().compact())
         .init();
+    match run().await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            error!("{}", e);
+            error!("This is a fatal error. Exiting");
+            std::process::exit(-1);
+        }
+    }
+}
+
+const ADDR: SocketAddr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 3000, 0, 0));
+
+async fn run() -> Result<(), Fatal> {
+    let cli = Cli::parse();
+
+    // tracing_subscriber::fmt()
+    //     .with_target(false)
+    //     .compact()
+    //     .init();
+
+    let config = std::fs::read_to_string(&cli.config_path)
+        .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e.into()))?;
 
     let config: Config =
-        toml::from_str(std::fs::read_to_string(FsPath::new("idelephant.toml"))?.as_str())?;
+        toml::from_str(&config).map_err(|e| Fatal::ReadConfigFile(cli.config_path, e.into()))?;
 
-    let db = make_db(FsPath::new(config.db_path.as_str())).await?;
+    let db = make_db(FsPath::new(config.db_path.as_str()))
+        .await
+        .map_err(|e| Fatal::DbSetup(e.into()))?;
     let ps = PersistenceService::new(db.clone());
 
-    let key = PublicKey::from_openssh(&config.root_key)?;
+    let key = PublicKey::from_openssh(&config.root_key).map_err(|e| Fatal::AdminKey(e.into()))?;
     let spki_bytes = convert_key(&key)?.to_boxed_slice();
     ps.configure_root_key(key.fingerprint(HashAlg::Sha256).as_bytes(), &spki_bytes)
-        .await?;
+        .await
+        .map_err(|e| Fatal::AdminKey(e.into()))?;
 
     let state = AppState { ps: ps.clone() };
 
@@ -73,10 +117,13 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     // Start listening on the given address.
-    let addr = SocketAddr::from((Ipv6Addr::UNSPECIFIED, 3000));
-    info!(?addr, "listening");
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app.into_make_service()).await?;
+    info!(?ADDR, "listening");
+    let listener = tokio::net::TcpListener::bind(ADDR)
+        .await
+        .map_err(|e| Fatal::Listen(ADDR, e))?;
+    axum::serve(listener, app.into_make_service())
+        .await
+        .map_err(|e| Fatal::Other(e.into()))?;
     Ok(())
 }
 
