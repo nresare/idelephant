@@ -1999,7 +1999,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
- "hex-literal",
+ "clap",
  "idelephant_common",
  "idelephant_webauthn",
  "mime_guess",

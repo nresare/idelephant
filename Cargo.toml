@@ -34,6 +34,7 @@ thiserror = { workspace = true }
 idelephant_webauthn = { path = "webauthn"}
 toml = "0.8.20"
 ssh-key = "0.6.7"
+clap = { workspace = true }
 
 [workspace.dependencies]
 serde_json = { version = "1.0.138", features = ["preserve_order"] }
@@ -44,8 +45,8 @@ hex-literal = "1.0.0"
 spki = { version = "0.7.3", features = ["alloc"]}
 sha2 = "0.10.8"
 tracing-subscriber = {  version = "0.3.19", features = ["env-filter"] }
+clap = { version = "4.5.32", features = ["derive"] }
 
 
 [dev-dependencies]
 tempfile = "3.15.0"
-hex-literal = {workspace = true}
