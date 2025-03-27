@@ -1,17 +1,62 @@
 // A service that is used to generate invites to be sent to users
 
+use crate::auth::IDENTITY;
 use crate::config::EmailConfig;
-use crate::persistence::PersistenceService;
-use crate::Fatal;
+use crate::error::IdentityError;
+use crate::persistence::{Identity, PersistenceService};
+use crate::{AppState, Fatal};
 use anyhow::{anyhow, Context};
+use axum::extract::{FromRef, State};
+use axum::http::StatusCode;
+use axum::routing::post;
+use axum::{Json, Router};
 use handlebars::{Handlebars, Template};
 use lettre::message::{Mailbox, MultiPart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use rust_embed::Embed;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::borrow::Cow;
+use std::ops::Deref;
 use std::sync::Arc;
+use tower_sessions::Session;
+use tracing::info;
+
+pub fn invite_routes() -> Router<AppState> {
+    Router::new().route("/invite", post(invite_handler))
+}
+async fn invite_handler(
+    session: Session,
+    State(invite_service): State<InviteService>,
+    Json(invite_request): Json<InviteRequest>,
+) -> Result<StatusCode, IdentityError> {
+    match session.get::<Identity>(IDENTITY).await? {
+        Some(identity) => {
+            if !identity.admin {
+                return Ok(StatusCode::UNAUTHORIZED);
+            }
+        }
+        _ => return Ok(StatusCode::UNAUTHORIZED),
+    }
+    info!("Invite user with email '{}'", invite_request.email);
+    invite_service
+        .invite(&invite_request.email, invite_request.admin)
+        .await?;
+    Ok(StatusCode::OK)
+}
+
+#[derive(Serialize, Deserialize)]
+struct InviteRequest {
+    email: String,
+    admin: bool,
+}
+
+impl FromRef<AppState> for InviteService {
+    fn from_ref(input: &AppState) -> Self {
+        input.is.deref().clone()
+    }
+}
 
 #[derive(Clone)]
 pub struct InviteService {
