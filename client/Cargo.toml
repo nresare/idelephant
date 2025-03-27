@@ -22,6 +22,7 @@ tracing-subscriber = { workspace = true}
 ssh-agent-client-rs = "0.9.1"
 ssh-key = { version = "0.6.7", features = ["crypto"] }
 clap = { workspace = true }
+serde = { version = "1.0.219", features = ["derive"] }
 
 [dev-dependencies]
 hex-literal = { workspace = true}

@@ -28,7 +28,8 @@ struct AuthStart {
     challenge: String,
 }
 
-const AUTH_CHALLENGE: &str = "auth-challenge";
+const AUTH_CHALLENGE: &str = "idelephant.auth-challenge";
+pub const IDENTITY: &str = "idelephant.identity";
 
 async fn auth_start(session: Session) -> Result<Json<AuthStart>, IdentityError> {
     let challenge = make_token();
@@ -56,26 +57,26 @@ async fn auth_finish(
         &credential.response.user_handle
     ))?;
 
-    let Some(identity) = persistence_service.fetch(user_handle).await? else {
+    let Some(identity) = persistence_service.fetch_identity(user_handle).await? else {
         return Err(IdentityError::Anyhow(anyhow!(
             "Could not find identity with id {user_handle}"
         )));
     };
 
-    let key = find_key(identity, &credential.id)?;
+    let key = find_key(&identity, &credential.id)?;
 
-    credential.verify(&key, &challenge)?;
-
+    credential.verify(key, &challenge)?;
+    session.insert(IDENTITY, &identity).await?;
     Ok("OK".to_string())
 }
 
-fn find_key(identity: Identity, credential_id: &[u8]) -> Result<Vec<u8>, IdentityError> {
-    let Active { credentials } = identity.state else {
+fn find_key<'a>(identity: &'a Identity, credential_id: &[u8]) -> Result<&'a [u8], IdentityError> {
+    let Active { credentials } = &identity.state else {
         return Err(anyhow!("Identity is not in state active").into());
     };
     for credential in credentials {
         if credential.id == credential_id {
-            return Ok(credential.public_key);
+            return Ok(&credential.public_key);
         }
     }
     Err(anyhow!(

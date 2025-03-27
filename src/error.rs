@@ -5,7 +5,7 @@ use tracing::error;
 
 #[derive(Error, Debug)]
 pub enum IdentityError {
-    #[error("catch-all error: {0}")]
+    #[error("catch-all error: {0:#}")]
     Anyhow(#[from] anyhow::Error),
     #[error("Failure related to interacting with the session: {0}")]
     Session(#[from] tower_sessions::session::Error),
@@ -14,11 +14,13 @@ pub enum IdentityError {
     Logic(String),
     #[error("Persistent storage error: {0}")]
     PersistentStorage(#[from] surrealdb::Error),
+    #[error("Email already in use")]
+    EmailAlreadyInUse,
 }
 
 impl IntoResponse for IdentityError {
     fn into_response(self) -> axum::response::Response {
-        error!("{}", self);
+        error!("{:#}", self);
         (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", self)).into_response()
     }
 }
