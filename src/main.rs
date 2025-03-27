@@ -8,26 +8,22 @@ mod register;
 mod root_setup;
 mod util;
 
-use crate::auth::{auth_routes, IDENTITY};
+use crate::auth::auth_routes;
 use crate::config::Config;
-use crate::error::IdentityError;
-use crate::invite::InviteService;
-use crate::persistence::{make_db, Identity, PersistenceService};
+use crate::invite::{invite_routes, InviteService};
+use crate::persistence::{make_db, PersistenceService};
 use crate::register::register_routes;
-use axum::extract::{FromRef, Path, State};
+use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
-use axum::routing::{get, post, Router};
-use axum::Json;
+use axum::routing::{get, Router};
 use clap::Parser;
 use embed::StaticFile;
 use idelephant_common::{convert_key, ToBoxedSlice};
-use serde::{Deserialize, Serialize};
 use ssh_key::{HashAlg, PublicKey};
 use std::borrow::Cow;
 use std::io;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::ops::Deref;
 use std::path::Path as FsPath;
 use std::sync::Arc;
 use surrealdb::engine::any::Any;
@@ -36,7 +32,7 @@ use thiserror::Error;
 use time::Duration;
 use tower_http::trace;
 use tower_http::trace::TraceLayer;
-use tower_sessions::{Expiry, Session, SessionManagerLayer};
+use tower_sessions::{Expiry, SessionManagerLayer};
 use tower_sessions_surrealdb_store::SurrealSessionStore;
 use tracing::Level;
 use tracing::{error, info};
@@ -128,7 +124,7 @@ async fn run() -> Result<(), Fatal> {
         .route("/static/{*path}", get(static_handler))
         .merge(register_routes())
         .merge(auth_routes())
-        .route("/invite", post(invite_handler))
+        .merge(invite_routes())
         .fallback_service(get(not_found))
         .layer(make_session_layer(db))
         .layer(
@@ -160,38 +156,6 @@ fn make_session_layer(db: Surreal<Any>) -> SessionManagerLayer<SurrealSessionSto
 struct AppState {
     ps: Arc<PersistenceService>,
     is: Arc<InviteService>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct InviteRequest {
-    email: String,
-    admin: bool,
-}
-
-async fn invite_handler(
-    session: Session,
-    State(invite_service): State<InviteService>,
-    Json(invite_request): Json<InviteRequest>,
-) -> Result<StatusCode, IdentityError> {
-    match session.get::<Identity>(IDENTITY).await? {
-        Some(identity) => {
-            if !identity.admin {
-                return Ok(StatusCode::UNAUTHORIZED);
-            }
-        }
-        _ => return Ok(StatusCode::UNAUTHORIZED),
-    }
-    info!("Invite user with email '{}'", invite_request.email);
-    invite_service
-        .invite(&invite_request.email, invite_request.admin)
-        .await?;
-    Ok(StatusCode::OK)
-}
-
-impl FromRef<AppState> for InviteService {
-    fn from_ref(input: &AppState) -> Self {
-        input.is.deref().clone()
-    }
 }
 
 // We use static route matchers ("/" and "/index.html") to serve our home
