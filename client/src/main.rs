@@ -2,14 +2,15 @@ mod auth;
 mod credential;
 mod register;
 
-use crate::credential::{Credential, P256Random, SshAgentBackedCredential};
+use crate::credential::{P256Random, SshAgentBackedCredential};
+use crate::register::register_public_key;
+use anyhow::anyhow;
 use auth::authenticate;
-use base64::engine::general_purpose::STANDARD_NO_PAD;
-use base64::Engine;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use log::info;
-use rand::random;
-use reqwest::blocking::ClientBuilder;
+use reqwest::blocking::{Client, ClientBuilder};
+use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -18,8 +19,26 @@ pub(crate) const BASE: &str = "http://localhost:3000";
 
 #[derive(Parser)]
 struct Cli {
-    #[arg(short = 'a', long = "agent")]
-    agent: bool,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    #[command()]
+    /// Invite the user with the given email to this idElephant instance
+    Invite {
+        #[arg()]
+        email: String,
+        #[arg(long = "admin", short = 'e', default_value_t = false)]
+        admin: bool,
+    },
+    /// This functionality was used for initial testing and is now waiting for
+    /// use when building the performance testing suite
+    Register {
+        #[arg()]
+        email: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -32,23 +51,38 @@ fn main() -> anyhow::Result<()> {
 
     let client = ClientBuilder::new().cookie_store(true).build()?;
 
-    let credential: &mut dyn Credential = match args.agent {
-        true => &mut SshAgentBackedCredential::new()?,
-        false => &mut P256Random::new(),
-    };
-    let email = make_random_email();
+    let mut credential = SshAgentBackedCredential::new()?;
 
-    if args.agent {
-        authenticate(&client, credential, b"root".to_vec())?;
-    } else {
-        let user_id = register::register_public_key(&client, credential, &email)?;
-        authenticate(&client, credential, user_id)?;
-    }
+    authenticate(&client, &mut credential, b"root".to_vec())?;
     info!("Successfully authenticated using the newly registered key");
+
+    match args.command {
+        Command::Invite { email, admin } => {
+            info!("Inviting user with email '{}' and admin = {}", email, admin);
+            invite(&client, email, admin)?;
+        }
+        Command::Register { email } => {
+            info!("Registering user with email '{}'", email);
+            let mut key = P256Random::new();
+            register_public_key(&client, &mut key, &email)?;
+        }
+    }
     Ok(())
 }
 
-fn make_random_email() -> String {
-    let bytes: [u8; 8] = random();
-    format!("{}@example.com", STANDARD_NO_PAD.encode(bytes))
+#[derive(Serialize, Deserialize)]
+struct InviteRequest {
+    email: String,
+    admin: bool,
+}
+
+fn invite(client: &Client, email: String, admin: bool) -> Result<(), anyhow::Error> {
+    let response = client
+        .post(format!("{BASE}/invite"))
+        .json(&InviteRequest { email, admin })
+        .send()?;
+    match response.status() {
+        StatusCode::OK => Ok(()),
+        code => Err(anyhow!("Failed to invite user, status: {code}")),
+    }
 }

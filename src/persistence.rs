@@ -1,10 +1,11 @@
 use crate::error::IdentityError;
+use crate::util::Token;
 use crate::AppState;
 use axum::extract::FromRef;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 use std::path::Path;
-use std::sync::Arc;
 use surrealdb::engine::any;
 use surrealdb::engine::any::Any;
 use surrealdb::{RecordId, Surreal};
@@ -13,6 +14,7 @@ use surrealdb::{RecordId, Surreal};
 pub struct Identity {
     pub email: String,
     pub created: DateTime<Utc>,
+    pub admin: bool,
     pub state: IdentityState,
 }
 
@@ -25,6 +27,7 @@ struct Record {
 pub enum IdentityState {
     Allocated { challenge: Vec<u8> },
     Active { credentials: Vec<Credential> },
+    Invited { token: Token },
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
@@ -37,25 +40,27 @@ pub struct Credential {
 
 #[derive(Clone)]
 pub struct PersistenceService {
-    db: Arc<Surreal<Any>>,
+    db: Surreal<Any>,
 }
 
 pub async fn make_db(path: &Path) -> Result<Surreal<Any>, IdentityError> {
     let path = format!("surrealkv:{}", path.to_string_lossy());
     let db = any::connect(path).await?;
     db.use_ns("dev").use_db("identityprovider").await?;
-    let _ = db
-        .query("DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE")
+    db.query("DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE")
+        .query(
+            "DEFINE INDEX IF NOT EXISTS inviteToken ON identity FIELDS state.Invited.token UNIQUE",
+        )
         .await?;
     Ok(db)
 }
 
 impl PersistenceService {
     pub fn new(db: Surreal<Any>) -> Self {
-        PersistenceService { db: Arc::new(db) }
+        PersistenceService { db }
     }
 
-    pub async fn persist(&self, identity: Identity) -> Result<String, IdentityError> {
+    pub async fn persist_identity(&self, identity: Identity) -> Result<String, IdentityError> {
         let Some(result): Option<Record> = self.db.create("identity").content(identity).await?
         else {
             return Err(IdentityError::Logic(
@@ -65,7 +70,7 @@ impl PersistenceService {
         Ok(result.id.key().to_string())
     }
 
-    pub async fn persist_with_id(
+    pub async fn persist_identity_with_id(
         &self,
         id: &str,
         identity: Identity,
@@ -80,13 +85,37 @@ impl PersistenceService {
         Ok(result.id.key().to_string())
     }
 
-    pub async fn fetch(&self, id: &str) -> Result<Option<Identity>, IdentityError> {
+    pub async fn fetch_identity(&self, id: &str) -> Result<Option<Identity>, IdentityError> {
         Ok(self.db.select(("identity", id)).await?)
     }
 
-    pub async fn update(&self, id: &str, identity: Identity) -> Result<bool, IdentityError> {
+    pub async fn update_identity(
+        &self,
+        id: &str,
+        identity: Identity,
+    ) -> Result<bool, IdentityError> {
         let result: Option<Identity> = self.db.update(("identity", id)).content(identity).await?;
         Ok(result.is_some())
+    }
+
+    pub async fn create_invite(&self, email: &str, admin: bool) -> Result<Token, IdentityError> {
+        let token = Token::random();
+        let identity = Identity {
+            email: email.to_string(),
+            created: Utc::now(),
+            admin,
+            state: IdentityState::Invited {
+                token: token.clone(),
+            },
+        };
+        let result: Result<Option<Record>, _> = self.db.create("identity").content(identity).await;
+        match result {
+            Ok(_) => Ok(token),
+            Err(surrealdb::Error::Db(surrealdb::error::Db::IndexExists { .. })) => {
+                Err(IdentityError::EmailAlreadyInUse)
+            }
+            Err(e) => Err(IdentityError::PersistentStorage(e)),
+        }
     }
 
     pub async fn configure_root_key(
@@ -97,12 +126,12 @@ impl PersistenceService {
         let identity: Option<Identity> = self.db.select(("identity", "root")).await?;
         if let Some(mut identity) = identity {
             match identity.state {
-                IdentityState::Allocated { .. } => {
-                    return Err(IdentityError::Logic(
-                        "root identity should not have state Allocated".to_string(),
-                    ));
-                }
                 IdentityState::Active { mut credentials } => {
+                    if !identity.admin {
+                        return Err(IdentityError::Logic(
+                            "root identity is not admin".to_string(),
+                        ));
+                    }
                     let mut found = false;
                     for credential in credentials.iter() {
                         if credential.public_key == key_bytes {
@@ -117,16 +146,22 @@ impl PersistenceService {
                             sign_count: 0,
                         });
                         identity.state = IdentityState::Active { credentials };
-                        self.update("root", identity).await?;
+                        self.update_identity("root", identity).await?;
                     }
+                }
+                _ => {
+                    return Err(IdentityError::Logic(
+                        "root identity needs to be in state Active".to_string(),
+                    ));
                 }
             }
         } else {
-            self.persist_with_id(
+            self.persist_identity_with_id(
                 "root",
                 Identity {
                     email: "root_user".to_string(),
                     created: Utc::now(),
+                    admin: true,
                     state: IdentityState::Active {
                         credentials: vec![Credential {
                             id: credential_id.to_vec(),
@@ -145,12 +180,13 @@ impl PersistenceService {
 
 impl FromRef<AppState> for PersistenceService {
     fn from_ref(input: &AppState) -> Self {
-        input.ps.clone()
+        input.ps.deref().clone()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::error::IdentityError;
     use crate::persistence::{make_db, Credential, Identity, IdentityState, PersistenceService};
     use anyhow::Result;
     use chrono::Utc;
@@ -166,6 +202,7 @@ mod tests {
         let challenge = Vec::from(b"some_challenge");
 
         let mut identity = Identity {
+            admin: false,
             state: IdentityState::Allocated {
                 challenge: challenge.clone(),
             },
@@ -173,12 +210,13 @@ mod tests {
             created,
         };
 
-        let id = rs.persist(identity.clone()).await?;
+        let id = rs.persist_identity(identity.clone()).await?;
 
-        let result = rs.fetch(&id).await?;
+        let result = rs.fetch_identity(&id).await?;
         assert_eq!(
             result,
             Some(Identity {
+                admin: false,
                 email: email.to_string(),
                 state: IdentityState::Allocated { challenge },
                 created,
@@ -194,9 +232,9 @@ mod tests {
             }],
         };
 
-        assert!(rs.update(&id, identity).await?);
+        assert!(rs.update_identity(&id, identity).await?);
 
-        let result = rs.fetch(&id).await?;
+        let result = rs.fetch_identity(&id).await?;
         let IdentityState::Active { credentials } = result.unwrap().state else {
             panic!("did not update IdentityState::Active");
         };
@@ -209,6 +247,19 @@ mod tests {
                 sign_count: 0,
             }]
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_invite() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = make_db(dir.path()).await?;
+        let ps = PersistenceService::new(db);
+        ps.create_invite("some-email", false).await?;
+
+        let result = ps.create_invite("some-email", false).await;
+        assert!(matches!(result, Err(IdentityError::EmailAlreadyInUse)));
 
         Ok(())
     }

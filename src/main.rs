@@ -1,33 +1,42 @@
 mod auth;
+mod config;
 mod embed;
 mod error;
+mod invite;
 mod persistence;
 mod register;
 mod root_setup;
 mod util;
 
-use crate::auth::auth_routes;
-use crate::persistence::{make_db, PersistenceService};
+use crate::auth::{auth_routes, IDENTITY};
+use crate::config::Config;
+use crate::error::IdentityError;
+use crate::invite::InviteService;
+use crate::persistence::{make_db, Identity, PersistenceService};
 use crate::register::register_routes;
-use axum::extract::Path;
+use axum::extract::{FromRef, Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
-use axum::routing::{get, Router};
+use axum::routing::{get, post, Router};
+use axum::Json;
 use clap::Parser;
 use embed::StaticFile;
 use idelephant_common::{convert_key, ToBoxedSlice};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use ssh_key::{HashAlg, PublicKey};
+use std::borrow::Cow;
 use std::io;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::ops::Deref;
 use std::path::Path as FsPath;
+use std::sync::Arc;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
 use thiserror::Error;
 use time::Duration;
 use tower_http::trace;
 use tower_http::trace::TraceLayer;
-use tower_sessions::{Expiry, SessionManagerLayer};
+use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_surrealdb_store::SurrealSessionStore;
 use tracing::Level;
 use tracing::{error, info};
@@ -37,7 +46,12 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 struct Cli {
-    #[arg(name = "config-file", default_value = "/etc/idelephant.toml")]
+    #[arg(
+        name = "config-file",
+        short = 'c',
+        long = "config-file",
+        default_value = "/etc/idelephant.toml"
+    )]
     config_path: String,
 }
 
@@ -53,6 +67,8 @@ enum Fatal {
     AdminKey(anyhow::Error),
     #[error("Could not begin to listen to {0}: {1}")]
     Listen(SocketAddr, io::Error),
+    #[error("Failed to set up email transport: {0}")]
+    EmailTransport(anyhow::Error),
 }
 
 #[tokio::main]
@@ -92,7 +108,12 @@ async fn run() -> Result<(), Fatal> {
     let db = make_db(FsPath::new(config.db_path.as_str()))
         .await
         .map_err(|e| Fatal::DbSetup(e.into()))?;
-    let ps = PersistenceService::new(db.clone());
+    let ps = Arc::new(PersistenceService::new(db.clone()));
+    let is = Arc::new(InviteService::new(
+        ps.clone(),
+        &config.email_config,
+        Cow::from(config.origin),
+    )?);
 
     let key = PublicKey::from_openssh(&config.root_key).map_err(|e| Fatal::AdminKey(e.into()))?;
     let spki_bytes = convert_key(&key)?.to_boxed_slice();
@@ -100,13 +121,14 @@ async fn run() -> Result<(), Fatal> {
         .await
         .map_err(|e| Fatal::AdminKey(e.into()))?;
 
-    let state = AppState { ps: ps.clone() };
+    let state = AppState { ps, is };
 
     let app = Router::new()
         .route("/", get(index_handler))
         .route("/static/{*path}", get(static_handler))
         .merge(register_routes())
         .merge(auth_routes())
+        .route("/invite", post(invite_handler))
         .fallback_service(get(not_found))
         .layer(make_session_layer(db))
         .layer(
@@ -127,12 +149,6 @@ async fn run() -> Result<(), Fatal> {
     Ok(())
 }
 
-#[derive(Deserialize)]
-struct Config {
-    db_path: String,
-    root_key: String,
-}
-
 fn make_session_layer(db: Surreal<Any>) -> SessionManagerLayer<SurrealSessionStore<Any>> {
     let session_store = SurrealSessionStore::new(db, "session".to_string());
     SessionManagerLayer::new(session_store)
@@ -142,7 +158,40 @@ fn make_session_layer(db: Surreal<Any>) -> SessionManagerLayer<SurrealSessionSto
 
 #[derive(Clone)]
 struct AppState {
-    ps: PersistenceService,
+    ps: Arc<PersistenceService>,
+    is: Arc<InviteService>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct InviteRequest {
+    email: String,
+    admin: bool,
+}
+
+async fn invite_handler(
+    session: Session,
+    State(invite_service): State<InviteService>,
+    Json(invite_request): Json<InviteRequest>,
+) -> Result<StatusCode, IdentityError> {
+    match session.get::<Identity>(IDENTITY).await? {
+        Some(identity) => {
+            if !identity.admin {
+                return Ok(StatusCode::UNAUTHORIZED);
+            }
+        }
+        _ => return Ok(StatusCode::UNAUTHORIZED),
+    }
+    info!("Invite user with email '{}'", invite_request.email);
+    invite_service
+        .invite(&invite_request.email, invite_request.admin)
+        .await?;
+    Ok(StatusCode::OK)
+}
+
+impl FromRef<AppState> for InviteService {
+    fn from_ref(input: &AppState) -> Self {
+        input.is.deref().clone()
+    }
 }
 
 // We use static route matchers ("/" and "/index.html") to serve our home
