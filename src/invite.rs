@@ -4,10 +4,11 @@ use crate::config::EmailConfig;
 use crate::persistence::PersistenceService;
 use crate::Fatal;
 use anyhow::{anyhow, Context};
-use handlebars::Handlebars;
+use handlebars::{Handlebars, Template};
 use lettre::message::{Mailbox, MultiPart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+use rust_embed::Embed;
 use serde_json::json;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -39,10 +40,15 @@ impl InviteService {
         }
         let sender_email = config.sender_email.as_str();
         let mut register = Handlebars::new();
-        register.register_template_file("invite_plain", "email_templates/invite_email.txt.tmpl")
-            .map_err(|e|anyhow!("Could not register email template: 'email_templates/invite_email.txt.tmpl': {}", e))?;
-        register.register_template_file("invite_html", "email_templates/invite_email.html.tmpl")
-            .map_err(|e|anyhow!("Could not register email template 'email_templates/invite_email.html.tmpl': {}", e))?;
+
+        register.register_template(
+            "invite_plain",
+            EmailTemplate::compile("invite_email.html.tmpl")?,
+        );
+        register.register_template(
+            "invite_html",
+            EmailTemplate::compile("invite_email.html.tmpl")?,
+        );
 
         Ok(Self {
             persistence,
@@ -62,7 +68,7 @@ impl InviteService {
         let token = self.persistence.create_invite(email, admin).await?;
 
         let data = json!({
-            "invite_url": format!("{}/invite/{}", self.origin, token.base64()),
+            "invite_url": format!("{}/accept/{}", self.origin, token.base64()),
         });
 
         let m = Message::builder()
@@ -77,6 +83,36 @@ impl InviteService {
             .send(m)
             .await
             .context(format!("Failed to send invite email to '{}'", email))?;
+        Ok(())
+    }
+}
+
+#[derive(Embed)]
+#[folder = "email_templates"]
+struct EmailTemplate;
+
+impl EmailTemplate {
+    fn compile(path: &'static str) -> Result<Template, anyhow::Error> {
+        let embedded_file =
+            EmailTemplate::get(path).ok_or_else(|| anyhow!("Could not find template '{path}'"))?;
+        let s = std::str::from_utf8(embedded_file.data.as_ref())
+            .context(format!("Invalid utf-8 sequence in email_template/{}", path))?;
+        Ok(Template::compile(s)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::invite::EmailTemplate;
+    use handlebars::Handlebars;
+    use serde_json::json;
+
+    #[test]
+    fn test_render_template() -> Result<(), anyhow::Error> {
+        let mut registry = Handlebars::new();
+        registry.register_template("t", EmailTemplate::compile("invite_email.txt.tmpl")?);
+        let result = registry.render("t", &json!({"invite_url": "url"}))?;
+        assert!(!result.is_empty());
         Ok(())
     }
 }
