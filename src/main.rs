@@ -1,4 +1,5 @@
 mod auth;
+mod bytes;
 mod config;
 mod embed;
 mod error;
@@ -170,4 +171,19 @@ async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
 
 async fn not_found() -> (StatusCode, Html<&'static str>) {
     (StatusCode::NOT_FOUND, Html("<h1>404</h1><p>Not Found</p>"))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::bytes::Bytes;
+
+    #[test]
+    fn test_serde() -> anyhow::Result<()> {
+        let identity = Bytes::from(b"foo".to_vec());
+
+        let serialized = serde_json::to_value(&identity)?;
+        let deserialized: Bytes = serde_json::from_value(serialized)?;
+        assert_eq!(identity, deserialized);
+        Ok(())
+    }
 }

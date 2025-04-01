@@ -1,11 +1,10 @@
 document.getElementById("register").addEventListener("click", register)
-document.getElementById("authenticate").addEventListener("click", authenticate)
+//document.getElementById("authenticate").addEventListener("click", authenticate)
 
 async function register() {
-    const email = document.getElementById("email").value;
-    const data = await get_challenge(email);
+    const data = await get_challenge();
     const registrationResult = await navigator.credentials.create(
-        {publicKey: make_register_options(data["challenge"], data["user_id"], email)},
+        {publicKey: make_register_options(data["challenge"], data["user_id"], data["email"])},
     ).then((publicKeyCredential) => {
         const options = {
             method: "POST",
@@ -93,18 +92,14 @@ function make_register_options(challenge, user_id, email) {
 }
 
 // Returns a Promise<UInt8Array>
-async function get_challenge(email){
-    const args = {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({email: email})
-    };
-    return await fetch("/register-start", args)
+async function get_challenge(){
+    return await fetch("/register-start")
         .then((response) => response.json())
         .then(resp => {
             return {
                 "challenge": base64ToBytes(resp.challenge),
                 "user_id": base64ToBytes(resp.user_id),
+                "email": resp.email,
             }
         });
 }

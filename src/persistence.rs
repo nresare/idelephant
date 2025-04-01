@@ -1,6 +1,8 @@
 use crate::error::IdentityError;
+use crate::error::IdentityError::Logic;
 use crate::util::Token;
 use crate::AppState;
+use anyhow::anyhow;
 use axum::extract::FromRef;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -15,7 +17,19 @@ pub struct Identity {
     pub email: String,
     pub created: DateTime<Utc>,
     pub admin: bool,
+    pub id: Option<RecordId>,
     pub state: IdentityState,
+}
+
+impl Identity {
+    pub fn id(&self) -> Result<String, IdentityError> {
+        let Some(id) = self.id.as_ref() else {
+            return Err(IdentityError::Logic(
+                "Attempted to read id from Identity not read from the db".to_string(),
+            ));
+        };
+        Ok(id.key().into_inner_ref().to_raw())
+    }
 }
 
 #[derive(Deserialize)]
@@ -60,13 +74,14 @@ impl PersistenceService {
         PersistenceService { db }
     }
 
+    #[cfg(test)]
     pub async fn persist_identity(&self, identity: Identity) -> Result<String, IdentityError> {
-        let Some(result): Option<Record> = self.db.create("identity").content(identity).await?
-        else {
-            return Err(IdentityError::Logic(
-                "db.create succeeded but returned None".to_string(),
-            ));
-        };
+        let result: Record = self
+            .db
+            .create("identity")
+            .content(identity)
+            .await?
+            .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
         Ok(result.id.key().to_string())
     }
 
@@ -78,9 +93,7 @@ impl PersistenceService {
         let Some(result): Option<Record> =
             self.db.create(("identity", id)).content(identity).await?
         else {
-            return Err(IdentityError::Logic(
-                "db.create succeeded but returned None".to_string(),
-            ));
+            return Err(Logic("db.create succeeded but returned None".to_string()));
         };
         Ok(result.id.key().to_string())
     }
@@ -89,12 +102,13 @@ impl PersistenceService {
         Ok(self.db.select(("identity", id)).await?)
     }
 
-    pub async fn update_identity(
-        &self,
-        id: &str,
-        identity: Identity,
-    ) -> Result<bool, IdentityError> {
-        let result: Option<Identity> = self.db.update(("identity", id)).content(identity).await?;
+    pub async fn update_identity(&self, identity: &Identity) -> Result<bool, IdentityError> {
+        let id = identity.id()?;
+        let result: Option<Identity> = self
+            .db
+            .update(("identity", id))
+            .content(identity.clone())
+            .await?;
         Ok(result.is_some())
     }
 
@@ -107,6 +121,7 @@ impl PersistenceService {
             state: IdentityState::Invited {
                 token: token.clone(),
             },
+            id: None,
         };
         let result: Result<Option<Record>, _> = self.db.create("identity").content(identity).await;
         match result {
@@ -116,6 +131,18 @@ impl PersistenceService {
             }
             Err(e) => Err(IdentityError::PersistentStorage(e)),
         }
+    }
+
+    pub async fn id_email_from_token(
+        &self,
+        token: &Token,
+    ) -> Result<Option<Identity>, anyhow::Error> {
+        let mut result = self
+            .db
+            .query("SELECT * FROM identity where state.Invited.token = $t")
+            .bind(("t", token.clone()))
+            .await?;
+        result.take(0).map_err(|e| anyhow!(e))
     }
 
     pub async fn configure_root_key(
@@ -146,7 +173,11 @@ impl PersistenceService {
                             sign_count: 0,
                         });
                         identity.state = IdentityState::Active { credentials };
-                        self.update_identity("root", identity).await?;
+                        let _: Option<Identity> = self
+                            .db
+                            .update(("identity", "root"))
+                            .content(identity)
+                            .await?;
                     }
                 }
                 _ => {
@@ -170,6 +201,7 @@ impl PersistenceService {
                             sign_count: 0,
                         }],
                     },
+                    id: None,
                 },
             )
             .await?;
@@ -208,20 +240,15 @@ mod tests {
             },
             email: email.to_string(),
             created,
+            id: None,
         };
 
         let id = rs.persist_identity(identity.clone()).await?;
 
         let result = rs.fetch_identity(&id).await?;
-        assert_eq!(
-            result,
-            Some(Identity {
-                admin: false,
-                email: email.to_string(),
-                state: IdentityState::Allocated { challenge },
-                created,
-            })
-        );
+        let id_from_db = result.clone().unwrap().id.unwrap();
+        identity.id = Some(id_from_db);
+        assert_eq!(result.unwrap(), identity);
 
         identity.state = IdentityState::Active {
             credentials: vec![Credential {
@@ -232,7 +259,7 @@ mod tests {
             }],
         };
 
-        assert!(rs.update_identity(&id, identity).await?);
+        assert!(rs.update_identity(&identity).await?);
 
         let result = rs.fetch_identity(&id).await?;
         let IdentityState::Active { credentials } = result.unwrap().state else {
@@ -256,7 +283,11 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let db = make_db(dir.path()).await?;
         let ps = PersistenceService::new(db);
-        ps.create_invite("some-email", false).await?;
+        let token = ps.create_invite("some-email", false).await?;
+        let id = ps.id_email_from_token(&token).await?.unwrap();
+        assert_eq!(&id.email, "some-email");
+        let identity = ps.fetch_identity(&id.id()?).await?.unwrap();
+        assert_eq!(identity.email, "some-email");
 
         let result = ps.create_invite("some-email", false).await;
         assert!(matches!(result, Err(IdentityError::EmailAlreadyInUse)));

@@ -5,13 +5,12 @@ use crate::util::make_token;
 use crate::AppState;
 use anyhow::anyhow;
 use axum::extract::State;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
-use chrono::Utc;
 use idelephant_webauthn::RegisterPublicKeyCredential;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use std::str;
 use tower_sessions::Session;
@@ -19,47 +18,43 @@ use tracing::info;
 
 const ORIGIN: &str = "http://localhost:3000";
 
-#[derive(Deserialize)]
-pub(crate) struct RegisterStart {
-    email: String,
-}
-
 #[derive(Serialize)]
 pub(crate) struct RegisterStartResponse {
     challenge: String,
     user_id: String,
+    email: String,
 }
 
 const REGISTERING_ID_KEY: &str = "registering_email";
 
 pub(super) fn register_routes() -> Router<AppState> {
     Router::new()
-        .route("/register-start", post(register_start))
+        .route("/register-start", get(register_start))
         .route("/register-finish", post(register_finish))
 }
 
 async fn register_start(
     session: Session,
     State(persistence_service): State<PersistenceService>,
-    Json(register_start): Json<RegisterStart>,
 ) -> Result<Json<RegisterStartResponse>, IdentityError> {
-    info!(register_start.email, "creating a challenge for user");
-    let email = register_start.email;
     let challenge = make_token();
-    let identity = Identity {
-        email,
-        admin: false,
-        state: Allocated {
-            challenge: challenge.clone(),
-        },
-        created: Utc::now(),
+    let Some(mut identity): Option<Identity> = session.get("idelephant.register_id").await? else {
+        return Err(IdentityError::Anyhow(anyhow!(
+            "attempted to register without verifying email"
+        )));
     };
-    let user_id = persistence_service.persist_identity(identity).await?;
+
+    identity.state = Allocated {
+        challenge: challenge.clone(),
+    };
+    let user_id = identity.id()?;
+    persistence_service.update_identity(&identity).await?;
     session.insert(REGISTERING_ID_KEY, &user_id).await?;
-    info!(user_id, "user allocated");
+    info!("user allocated: {}", &user_id);
     Ok(Json(RegisterStartResponse {
         challenge: STANDARD_NO_PAD.encode(challenge),
-        user_id: STANDARD_NO_PAD.encode(user_id),
+        user_id: STANDARD_NO_PAD.encode(&user_id),
+        email: identity.email,
     }))
 }
 
@@ -103,7 +98,7 @@ pub(super) async fn register_finish(
         }],
     };
 
-    persistence_service.update_identity(&id, identity).await?;
+    persistence_service.update_identity(&identity).await?;
     session.remove::<String>(REGISTERING_ID_KEY).await?;
     Ok(())
 }

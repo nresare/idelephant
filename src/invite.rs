@@ -4,11 +4,13 @@ use crate::auth::IDENTITY;
 use crate::config::EmailConfig;
 use crate::error::IdentityError;
 use crate::persistence::{Identity, PersistenceService};
+use crate::util::Token;
 use crate::{AppState, Fatal};
 use anyhow::{anyhow, Context};
-use axum::extract::{FromRef, State};
+use axum::extract::{FromRef, Path, State};
 use axum::http::StatusCode;
-use axum::routing::post;
+use axum::response::Html;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use handlebars::{Handlebars, Template};
 use lettre::message::{Mailbox, MultiPart};
@@ -24,7 +26,9 @@ use tower_sessions::Session;
 use tracing::info;
 
 pub fn invite_routes() -> Router<AppState> {
-    Router::new().route("/invite", post(invite_handler))
+    Router::new()
+        .route("/invite", post(invite_handler))
+        .route("/accept/{token}", get(accept_handler))
 }
 async fn invite_handler(
     session: Session,
@@ -46,6 +50,25 @@ async fn invite_handler(
     Ok(StatusCode::OK)
 }
 
+async fn accept_handler(
+    Path(token): Path<String>,
+    session: Session,
+    State(invite_service): State<InviteService>,
+    State(persistence_service): State<PersistenceService>,
+) -> Result<Html<String>, IdentityError> {
+    let Some(id) = persistence_service
+        .id_email_from_token(&Token::from_base64(token)?)
+        .await?
+    else {
+        return Err(IdentityError::Anyhow(anyhow!("Can't find token")));
+    };
+    session.insert("idelephant.register_id", &id).await?;
+    let s = invite_service
+        .web_templates
+        .render("accept", &json!({ "email": id.email}))?;
+    Ok(Html(s))
+}
+
 #[derive(Serialize, Deserialize)]
 struct InviteRequest {
     email: String,
@@ -63,7 +86,8 @@ pub struct InviteService {
     persistence: Arc<PersistenceService>,
     transport: Arc<AsyncSmtpTransport<Tokio1Executor>>,
     sender: Mailbox,
-    register: Handlebars<'static>,
+    email_templates: Arc<Handlebars<'static>>,
+    web_templates: Arc<Handlebars<'static>>,
     origin: Cow<'static, str>,
 }
 
@@ -84,16 +108,19 @@ impl InviteService {
             builder = builder.credentials(Credentials::new(user.clone(), password));
         }
         let sender_email = config.sender_email.as_str();
-        let mut register = Handlebars::new();
+        let mut email_templates = Handlebars::new();
 
-        register.register_template(
+        email_templates.register_template(
             "invite_plain",
-            EmailTemplate::compile("invite_email.html.tmpl")?,
+            EmailTemplates::compile("invite_email.html.tmpl")?,
         );
-        register.register_template(
+        email_templates.register_template(
             "invite_html",
-            EmailTemplate::compile("invite_email.html.tmpl")?,
+            EmailTemplates::compile("invite_email.html.tmpl")?,
         );
+
+        let mut web_templates = Handlebars::new();
+        web_templates.register_template("accept", WebTemplates::compile("accept.html.tmpl")?);
 
         Ok(Self {
             persistence,
@@ -104,7 +131,8 @@ impl InviteService {
                     e
                 )
             })?,
-            register,
+            email_templates: Arc::new(email_templates),
+            web_templates: Arc::new(web_templates),
             origin,
         })
     }
@@ -121,8 +149,8 @@ impl InviteService {
             .to(email.parse()?)
             .subject("Invitation to idElephant")
             .multipart(MultiPart::alternative_plain_html(
-                self.register.render("invite_plain", &data)?,
-                self.register.render("invite_html", &data)?,
+                self.email_templates.render("invite_plain", &data)?,
+                self.email_templates.render("invite_html", &data)?,
             ))?;
         self.transport
             .send(m)
@@ -134,12 +162,20 @@ impl InviteService {
 
 #[derive(Embed)]
 #[folder = "email_templates"]
-struct EmailTemplate;
+struct EmailTemplates;
 
-impl EmailTemplate {
+impl Compile for EmailTemplates {}
+
+#[derive(Embed)]
+#[folder = "web_templates"]
+struct WebTemplates;
+
+impl Compile for WebTemplates {}
+
+trait Compile: Embed {
     fn compile(path: &'static str) -> Result<Template, anyhow::Error> {
         let embedded_file =
-            EmailTemplate::get(path).ok_or_else(|| anyhow!("Could not find template '{path}'"))?;
+            Self::get(path).ok_or_else(|| anyhow!("Could not find template '{path}'"))?;
         let s = std::str::from_utf8(embedded_file.data.as_ref())
             .context(format!("Invalid utf-8 sequence in email_template/{}", path))?;
         Ok(Template::compile(s)?)
@@ -148,14 +184,14 @@ impl EmailTemplate {
 
 #[cfg(test)]
 mod tests {
-    use crate::invite::EmailTemplate;
+    use crate::invite::{Compile, EmailTemplates};
     use handlebars::Handlebars;
     use serde_json::json;
 
     #[test]
     fn test_render_template() -> Result<(), anyhow::Error> {
         let mut registry = Handlebars::new();
-        registry.register_template("t", EmailTemplate::compile("invite_email.txt.tmpl")?);
+        registry.register_template("t", EmailTemplates::compile("invite_email.txt.tmpl")?);
         let result = registry.render("t", &json!({"invite_url": "url"}))?;
         assert!(!result.is_empty());
         Ok(())
