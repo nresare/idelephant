@@ -1,5 +1,7 @@
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use base64::DecodeError;
+use handlebars::RenderError;
 use thiserror::Error;
 use tracing::error;
 
@@ -16,6 +18,10 @@ pub enum IdentityError {
     PersistentStorage(#[from] surrealdb::Error),
     #[error("Email already in use")]
     EmailAlreadyInUse,
+    #[error("Failed to render html output")]
+    Render(#[from] RenderError),
+    #[error("Failed to parse token")]
+    Token(#[from] DecodeError),
 }
 
 impl IntoResponse for IdentityError {

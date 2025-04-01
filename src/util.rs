@@ -1,9 +1,10 @@
+use crate::bytes::Bytes;
+use crate::error::IdentityError;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use rand::{random, rng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
-use surrealdb::sql::Bytes;
 
 // According to the spec(1) this needs to be at least 16 bytes. We go with 18
 // as we will base64 encode the value and lengths not evenly divisible by 3 will
@@ -27,6 +28,12 @@ impl Token {
 
     pub fn base64(&self) -> String {
         URL_SAFE_NO_PAD.encode(self.0.deref())
+    }
+
+    pub fn from_base64(base64: impl AsRef<str>) -> Result<Self, IdentityError> {
+        Ok(Token(
+            URL_SAFE_NO_PAD.decode(base64.as_ref().as_bytes())?.into(),
+        ))
     }
 }
 
