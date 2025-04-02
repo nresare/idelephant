@@ -8,19 +8,23 @@ mod persistence;
 mod register;
 mod root_setup;
 mod util;
+mod web;
 
-use crate::auth::auth_routes;
+use crate::auth::{auth_routes, IDENTITY};
 use crate::config::Config;
+use crate::error::IdentityError;
 use crate::invite::{invite_routes, InviteService};
-use crate::persistence::{make_db, PersistenceService};
+use crate::persistence::{make_db, Identity, PersistenceService};
 use crate::register::register_routes;
-use axum::extract::Path;
+use crate::web::Templates;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, Router};
 use clap::Parser;
 use embed::StaticFile;
 use idelephant_common::{convert_key, ToBoxedSlice};
+use serde_json::json;
 use ssh_key::{HashAlg, PublicKey};
 use std::borrow::Cow;
 use std::io;
@@ -33,7 +37,7 @@ use thiserror::Error;
 use time::Duration;
 use tower_http::trace;
 use tower_http::trace::TraceLayer;
-use tower_sessions::{Expiry, SessionManagerLayer};
+use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_surrealdb_store::SurrealSessionStore;
 use tracing::Level;
 use tracing::{error, info};
@@ -118,11 +122,14 @@ async fn run() -> Result<(), Fatal> {
         .await
         .map_err(|e| Fatal::AdminKey(e.into()))?;
 
-    let state = AppState { ps, is };
+    let templates = Arc::new(Templates::new()?);
+
+    let state = AppState { ps, is, templates };
 
     let app = Router::new()
         .route("/", get(index_handler))
         .route("/static/{*path}", get(static_handler))
+        .route("/logout", get(logout_handler))
         .merge(register_routes())
         .merge(auth_routes())
         .merge(invite_routes())
@@ -157,12 +164,22 @@ fn make_session_layer(db: Surreal<Any>) -> SessionManagerLayer<SurrealSessionSto
 struct AppState {
     ps: Arc<PersistenceService>,
     is: Arc<InviteService>,
+    templates: Arc<Templates>,
 }
 
 // We use static route matchers ("/" and "/index.html") to serve our home
 // page.
-async fn index_handler() -> impl IntoResponse {
-    StaticFile("index.html")
+async fn index_handler(
+    State(templates): State<Templates>,
+    session: Session,
+) -> Result<Html<String>, IdentityError> {
+    let id: Option<Identity> = session.get(IDENTITY).await?;
+    Ok(Html(templates.render("index", &json!({"identity": id}))?))
+}
+
+async fn logout_handler(session: Session) -> Result<StatusCode, IdentityError> {
+    let _: Option<Identity> = session.remove(IDENTITY).await?;
+    Ok(StatusCode::OK)
 }
 
 async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {

@@ -5,6 +5,7 @@ use crate::config::EmailConfig;
 use crate::error::IdentityError;
 use crate::persistence::{Identity, PersistenceService};
 use crate::util::Token;
+use crate::web::Templates;
 use crate::{AppState, Fatal};
 use anyhow::{anyhow, Context};
 use axum::extract::{FromRef, Path, State};
@@ -53,7 +54,7 @@ async fn invite_handler(
 async fn accept_handler(
     Path(token): Path<String>,
     session: Session,
-    State(invite_service): State<InviteService>,
+    State(templates): State<Templates>,
     State(persistence_service): State<PersistenceService>,
 ) -> Result<Html<String>, IdentityError> {
     let Some(id) = persistence_service
@@ -63,9 +64,7 @@ async fn accept_handler(
         return Err(IdentityError::Anyhow(anyhow!("Can't find token")));
     };
     session.insert("idelephant.register_id", &id).await?;
-    let s = invite_service
-        .web_templates
-        .render("accept", &json!({ "email": id.email}))?;
+    let s = templates.render("accept", &json!({ "email": id.email}))?;
     Ok(Html(s))
 }
 
@@ -87,7 +86,6 @@ pub struct InviteService {
     transport: Arc<AsyncSmtpTransport<Tokio1Executor>>,
     sender: Mailbox,
     email_templates: Arc<Handlebars<'static>>,
-    web_templates: Arc<Handlebars<'static>>,
     origin: Cow<'static, str>,
 }
 
@@ -119,9 +117,6 @@ impl InviteService {
             EmailTemplates::compile("invite_email.html.tmpl")?,
         );
 
-        let mut web_templates = Handlebars::new();
-        web_templates.register_template("accept", WebTemplates::compile("accept.html.tmpl")?);
-
         Ok(Self {
             persistence,
             transport: Arc::new(builder.build()),
@@ -132,7 +127,6 @@ impl InviteService {
                 )
             })?,
             email_templates: Arc::new(email_templates),
-            web_templates: Arc::new(web_templates),
             origin,
         })
     }
@@ -166,13 +160,7 @@ struct EmailTemplates;
 
 impl Compile for EmailTemplates {}
 
-#[derive(Embed)]
-#[folder = "web_templates"]
-struct WebTemplates;
-
-impl Compile for WebTemplates {}
-
-trait Compile: Embed {
+pub trait Compile: Embed {
     fn compile(path: &'static str) -> Result<Template, anyhow::Error> {
         let embedded_file =
             Self::get(path).ok_or_else(|| anyhow!("Could not find template '{path}'"))?;
