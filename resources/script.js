@@ -1,5 +1,3 @@
-document.getElementById("register").addEventListener("click", register)
-//document.getElementById("authenticate").addEventListener("click", authenticate)
 
 async function register() {
     const data = await get_challenge();
@@ -27,11 +25,17 @@ async function authenticate() {
             return fetch("/auth-finish", options)
         })
     if (auth_result.ok) {
-        alert("logged in successfully");
+        location.reload()
     } else {
         alert("something went wrong: " + auth_result.status);
     }
+}
 
+async function logout() {
+    const result = await fetch("/logout", {method: "GET"})
+    if (result.ok) {
+        location.reload()
+    }
 }
 
 async function get_auth_challenge() {

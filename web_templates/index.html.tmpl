@@ -1,0 +1,37 @@
+<html lang="en">
+    <head>
+        <title>idElephant signup and login page</title>
+        <link rel="stylesheet" href="/static/index.css"/>
+    </head>
+    <body>
+
+        <main class="main">
+            <section>
+
+                {{#if identity}}
+                <h1>Welcome back {{identity.email}}</h1>
+                <p><input id="logout" type="submit" value="log out"/></p>
+                {{else}}
+                <h1>Welcome to idElephant</h1>
+                <p><input id="authenticate" type="submit" value="log in"/></p>
+                {{/if}}
+                <!--
+                <div class="nice-form-group">
+                    <label for="email">Enter your email:</label>
+                    <input id="email" name="email" type="email"/>
+                    <input id="register" type="submit" value="register"/>
+                </div-->
+            </section>
+        </main>
+    <script src="static/script.js">
+    </script>
+    <script>
+    {{#if identity}}
+    document.getElementById("logout").addEventListener("click", logout)
+    {{else}}
+    document.getElementById("authenticate").addEventListener("click", authenticate)
+    {{/if}}
+    </script>
+    </body>
+</html>
+</body>
