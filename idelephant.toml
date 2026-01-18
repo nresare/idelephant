@@ -2,3 +2,9 @@ root_key = """ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNT
 dHwACESMqdTSxxIP+UytIBlUU+37/7qyCKkkRWFlvsRyjSQbfnLRE+UZTlH8Y="""
 
 db_path = "/tmp/db"
+
+origin = "http://localhost:8080"
+
+[email]
+sender_email = "noa@resare.com"
+relay_host = "mail.resare.com"
