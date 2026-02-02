@@ -129,7 +129,7 @@ impl PersistenceService {
             Err(surrealdb::Error::Db(surrealdb::error::Db::IndexExists { .. })) => {
                 Err(IdentityError::EmailAlreadyInUse)
             }
-            Err(e) => Err(IdentityError::PersistentStorage(e)),
+            Err(e) => Err(e.into()),
         }
     }
 
