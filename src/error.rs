@@ -15,7 +15,7 @@ pub enum IdentityError {
     #[error("Logic error: {0}")]
     Logic(String),
     #[error("Persistent storage error: {0}")]
-    PersistentStorage(#[from] surrealdb::Error),
+    PersistentStorage(#[from] Box<surrealdb::Error>),
     #[error("Email already in use")]
     EmailAlreadyInUse,
     #[error("Failed to render html output")]
@@ -28,5 +28,11 @@ impl IntoResponse for IdentityError {
     fn into_response(self) -> axum::response::Response {
         error!("{:#}", self);
         (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", self)).into_response()
+    }
+}
+
+impl From<surrealdb::Error> for IdentityError {
+    fn from(err: surrealdb::Error) -> Self {
+        IdentityError::PersistentStorage(Box::new(err))
     }
 }
