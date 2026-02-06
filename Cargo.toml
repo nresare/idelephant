@@ -13,42 +13,42 @@ members = [
 [dependencies]
 idelephant_common = {path = "common"}
 anyhow = { workspace = true }
-axum = "0.8.1"
-tower = "0.5.2"
-rust-embed = "8.6.0"
-tokio = { version = "1.44.0" }
+axum = "0.8.8"
+rust-embed = "8.11.0"
+tokio = { version = "1.49.0" }
 mime_guess = "2.0.5"
-tower-http = { version = "0.6.2", features = ["trace"] }
-serde = { version = "1.0.219", features = ["derive"] }
-chrono = { version = "0.4.40", features = ["serde"]}
-tracing = "0.1.41"
+tower-http = { version = "0.6.8", features = ["trace"] }
+serde = { version = "1.0.228", features = ["derive"] }
+chrono = { version = "0.4.43", features = ["serde"]}
+tracing = "0.1.44"
 tracing-subscriber = {  workspace = true }
-rand = "0.9.0"
+rand = "0.9.2"
 base64 = { workspace = true }
-surrealdb = { version = "2.2.1", features = ["kv-mem", "kv-surrealkv"] }
+surrealdb = { version = "2.6.0", default-features = false, features = ["protocol-ws"] }
 tower-sessions = "0.14.0"
-tower-sessions-surrealdb-store = "0.6.0"
-time = "0.3.39"
+tower-sessions-surrealdb-store = "0.7.0"
+time = "0.3.46"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 idelephant_webauthn = { path = "webauthn"}
-toml = "0.8.20"
+toml = "0.9.11"
 ssh-key = "0.6.7"
 clap = { workspace = true }
-lettre = { version = "0.11.15", features = ["native-tls", "webpki-roots", "tokio1", "tokio1-native-tls", "builder"] }
-handlebars = "6.3.2"
+lettre = { version = "0.11.19", features = ["native-tls", "webpki-roots", "tokio1", "tokio1-native-tls", "builder"] }
+handlebars = "6.4.0"
 
 [workspace.dependencies]
-serde_json = { version = "1.0.138", features = ["preserve_order"] }
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
 base64 = "0.22.1"
-thiserror = "2.0.11"
-anyhow = "1.0.95"
-hex-literal = "1.0.0"
+thiserror = "2.0.18"
+anyhow = "1.0.100"
+hex-literal = "1.1.0"
 spki = { version = "0.7.3", features = ["alloc"]}
 sha2 = "0.10.8"
-tracing-subscriber = {  version = "0.3.19", features = ["env-filter"] }
-clap = { version = "4.5.32", features = ["derive"] }
+tracing-subscriber = {  version = "0.3.22", features = ["env-filter"] }
+clap = { version = "4.5.54", features = ["derive"] }
 
 
 [dev-dependencies]
-tempfile = "3.15.0"
+tempfile = "3.24.0"
+surrealdb = { version = "2.6.0", features = ["kv-mem", "kv-surrealkv"] }
