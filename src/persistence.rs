@@ -1,3 +1,4 @@
+use crate::config::PersistenceConfig;
 use crate::error::IdentityError;
 use crate::error::IdentityError::Logic;
 use crate::util::Token;
@@ -10,7 +11,6 @@ use std::ops::Deref;
 use surrealdb::engine::any;
 use surrealdb::engine::any::Any;
 use surrealdb::{RecordId, Surreal};
-use crate::config::PersistenceConfig;
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
 pub struct Identity {
@@ -64,7 +64,8 @@ pub async fn make_db(config: &PersistenceConfig) -> Result<Surreal<Any>, Identit
         database: "idelephant",
         username: &config.username,
         password: &config.password()?,
-    }).await?;
+    })
+    .await?;
     setup_db(&db).await?;
     Ok(db)
 }
@@ -165,9 +166,7 @@ impl PersistenceService {
             match identity.state {
                 IdentityState::Active { mut credentials } => {
                     if !identity.admin {
-                        return Err(Logic(
-                            "root identity is not admin".to_string(),
-                        ));
+                        return Err(Logic("root identity is not admin".to_string()));
                     }
                     let mut found = false;
                     for credential in credentials.iter() {
