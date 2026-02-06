@@ -1,3 +1,4 @@
+use crate::config::PersistenceConfig;
 use crate::error::IdentityError;
 use crate::error::IdentityError::Logic;
 use crate::util::Token;
@@ -7,7 +8,6 @@ use axum::extract::FromRef;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
-use std::path::Path;
 use surrealdb::engine::any;
 use surrealdb::engine::any::Any;
 use surrealdb::{RecordId, Surreal};
@@ -24,7 +24,7 @@ pub struct Identity {
 impl Identity {
     pub fn id(&self) -> Result<String, IdentityError> {
         let Some(id) = self.id.as_ref() else {
-            return Err(IdentityError::Logic(
+            return Err(Logic(
                 "Attempted to read id from Identity not read from the db".to_string(),
             ));
         };
@@ -57,16 +57,27 @@ pub struct PersistenceService {
     db: Surreal<Any>,
 }
 
-pub async fn make_db(path: &Path) -> Result<Surreal<Any>, IdentityError> {
-    let path = format!("surrealkv:{}", path.to_string_lossy());
-    let db = any::connect(path).await?;
-    db.use_ns("dev").use_db("identityprovider").await?;
+pub async fn make_db(config: &PersistenceConfig) -> Result<Surreal<Any>, IdentityError> {
+    let db = any::connect(&config.uri).await?;
+    db.signin(surrealdb::opt::auth::Database {
+        namespace: "default",
+        database: "idelephant",
+        username: &config.username,
+        password: &config.password()?,
+    })
+    .await?;
+    setup_db(&db).await?;
+    Ok(db)
+}
+
+async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
+    db.use_ns("default").use_db("idelephant").await?;
     db.query("DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE")
         .query(
             "DEFINE INDEX IF NOT EXISTS inviteToken ON identity FIELDS state.Invited.token UNIQUE",
         )
         .await?;
-    Ok(db)
+    Ok(())
 }
 
 impl PersistenceService {
@@ -155,9 +166,7 @@ impl PersistenceService {
             match identity.state {
                 IdentityState::Active { mut credentials } => {
                     if !identity.admin {
-                        return Err(IdentityError::Logic(
-                            "root identity is not admin".to_string(),
-                        ));
+                        return Err(Logic("root identity is not admin".to_string()));
                     }
                     let mut found = false;
                     for credential in credentials.iter() {
@@ -181,7 +190,7 @@ impl PersistenceService {
                     }
                 }
                 _ => {
-                    return Err(IdentityError::Logic(
+                    return Err(Logic(
                         "root identity needs to be in state Active".to_string(),
                     ));
                 }
@@ -219,16 +228,18 @@ impl FromRef<AppState> for PersistenceService {
 #[cfg(test)]
 mod tests {
     use crate::error::IdentityError;
-    use crate::persistence::{make_db, Credential, Identity, IdentityState, PersistenceService};
+    use crate::persistence::{setup_db, Credential, Identity, IdentityState, PersistenceService};
     use anyhow::Result;
     use chrono::Utc;
+    use surrealdb::engine::any;
+    use surrealdb::engine::any::Any;
+    use surrealdb::Surreal;
 
     #[tokio::test]
     async fn test_persist() -> Result<()> {
         let email = "some-email@example.com";
 
-        let dir = tempfile::tempdir()?;
-        let db = make_db(dir.path()).await?;
+        let db = mem_db().await?;
         let rs = PersistenceService::new(db);
         let created = Utc::now();
         let challenge = Vec::from(b"some_challenge");
@@ -280,8 +291,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_invite() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let db = make_db(dir.path()).await?;
+        let db = mem_db().await?;
         let ps = PersistenceService::new(db);
         let token = ps.create_invite("some-email", false).await?;
         let id = ps.id_email_from_token(&token).await?.unwrap();
@@ -293,5 +303,11 @@ mod tests {
         assert!(matches!(result, Err(IdentityError::EmailAlreadyInUse)));
 
         Ok(())
+    }
+
+    async fn mem_db() -> std::result::Result<Surreal<Any>, IdentityError> {
+        let db = any::connect("mem://").await?;
+        setup_db(&db).await?;
+        Ok(db)
     }
 }

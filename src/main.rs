@@ -29,7 +29,6 @@ use ssh_key::{HashAlg, PublicKey};
 use std::borrow::Cow;
 use std::io;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::path::Path as FsPath;
 use std::sync::Arc;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
@@ -106,7 +105,7 @@ async fn run() -> Result<(), Fatal> {
     let config: Config =
         toml::from_str(&config).map_err(|e| Fatal::ReadConfigFile(cli.config_path, e.into()))?;
 
-    let db = make_db(FsPath::new(config.db_path.as_str()))
+    let db = make_db(&config.persistence)
         .await
         .map_err(|e| Fatal::DbSetup(e.into()))?;
     let ps = Arc::new(PersistenceService::new(db.clone()));
