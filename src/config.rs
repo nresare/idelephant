@@ -1,6 +1,6 @@
-use std::path::Path;
 use anyhow::Error;
 use serde::Deserialize;
+use std::path::Path;
 
 #[derive(Deserialize)]
 pub struct Config {
