@@ -8,3 +8,8 @@ origin = "http://localhost:8080"
 [email]
 sender_email = "noa@resare.com"
 relay_host = "mail.resare.com"
+
+[persistence]
+uri = "ws://localhost:8000"
+username = "idelephant"
+password_file = "/tmp/password"
