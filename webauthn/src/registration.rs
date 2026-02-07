@@ -99,7 +99,11 @@ impl RegisterPublicKeyCredential {
             return Err(anyhow!("Challenge mismatch"));
         }
         if client_data.origin != origin.as_ref() {
-            return Err(anyhow!("origin mismatch"));
+            return Err(anyhow!(
+                "origin mismatch, expected {} but got {:?}",
+                origin.as_ref(),
+                client_data.origin
+            ));
         }
         let origin_sha256 = {
             let mut hasher = Sha256::new();
