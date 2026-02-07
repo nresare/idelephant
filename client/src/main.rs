@@ -15,7 +15,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-pub(crate) const BASE: &str = "http://localhost:3000";
+pub(crate) const BASE: &str = "https://id.noa.re";
 
 #[derive(Parser)]
 struct Cli {
