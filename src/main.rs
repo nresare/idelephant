@@ -15,7 +15,7 @@ use crate::config::Config;
 use crate::error::IdentityError;
 use crate::invite::{invite_routes, InviteService};
 use crate::persistence::{make_db, Identity, PersistenceService};
-use crate::register::register_routes;
+use crate::register::{register_routes, RegistrationService};
 use crate::web::Templates;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -26,7 +26,6 @@ use embed::StaticFile;
 use idelephant_common::{convert_key, ToBoxedSlice};
 use serde_json::json;
 use ssh_key::{HashAlg, PublicKey};
-use std::borrow::Cow;
 use std::io;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::Arc;
@@ -108,22 +107,8 @@ async fn run() -> Result<(), Fatal> {
     let db = make_db(&config.persistence)
         .await
         .map_err(|e| Fatal::DbSetup(e.into()))?;
-    let ps = Arc::new(PersistenceService::new(db.clone()));
-    let is = Arc::new(InviteService::new(
-        ps.clone(),
-        &config.email_config,
-        Cow::from(config.origin),
-    )?);
 
-    let key = PublicKey::from_openssh(&config.root_key).map_err(|e| Fatal::AdminKey(e.into()))?;
-    let spki_bytes = convert_key(&key)?.to_boxed_slice();
-    ps.configure_root_key(key.fingerprint(HashAlg::Sha256).as_bytes(), &spki_bytes)
-        .await
-        .map_err(|e| Fatal::AdminKey(e.into()))?;
-
-    let templates = Arc::new(Templates::new()?);
-
-    let state = AppState { ps, is, templates };
+    let state = build_app_state(&config, &db).await?;
 
     let app = Router::new()
         .route("/", get(index_handler))
@@ -152,6 +137,35 @@ async fn run() -> Result<(), Fatal> {
     Ok(())
 }
 
+async fn build_app_state(config: &Config, db: &Surreal<Any>) -> Result<AppState, Fatal> {
+    let ps = Arc::new(PersistenceService::new(db.clone()));
+    let rs = Arc::new(
+        RegistrationService::new(&config.origin)
+            .map_err(|e| Fatal::ReadConfigFile("Failed to parse origin".to_string(), e.into()))?,
+    );
+    let is = Arc::new(InviteService::new(
+        ps.clone(),
+        &config.email_config,
+        &config.origin,
+    )?);
+
+    let key = PublicKey::from_openssh(&config.root_key).map_err(|e| Fatal::AdminKey(e.into()))?;
+    let spki_bytes = convert_key(&key)?.to_boxed_slice();
+    ps.configure_root_key(key.fingerprint(HashAlg::Sha256).as_bytes(), &spki_bytes)
+        .await
+        .map_err(|e| Fatal::AdminKey(e.into()))?;
+
+    let templates = Arc::new(Templates::new()?);
+
+    let state = AppState {
+        ps,
+        is,
+        templates,
+        rs,
+    };
+    Ok(state)
+}
+
 fn make_session_layer(db: Surreal<Any>) -> SessionManagerLayer<SurrealSessionStore<Any>> {
     let session_store = SurrealSessionStore::new(db, "session".to_string());
     SessionManagerLayer::new(session_store)
@@ -164,6 +178,7 @@ struct AppState {
     ps: Arc<PersistenceService>,
     is: Arc<InviteService>,
     templates: Arc<Templates>,
+    rs: Arc<RegistrationService>,
 }
 
 // We use static route matchers ("/" and "/index.html") to serve our home

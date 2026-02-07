@@ -2247,6 +2247,7 @@ dependencies = [
  "tower-sessions-surrealdb-store",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

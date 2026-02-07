@@ -4,7 +4,7 @@ use crate::persistence::{Credential, Identity, IdentityState, PersistenceService
 use crate::util::make_token;
 use crate::AppState;
 use anyhow::anyhow;
-use axum::extract::State;
+use axum::extract::{FromRef, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD_NO_PAD;
@@ -12,11 +12,11 @@ use base64::Engine;
 use idelephant_webauthn::RegisterPublicKeyCredential;
 use serde::Serialize;
 use serde_json::Value;
+use std::ops::Deref;
 use std::str;
 use tower_sessions::Session;
 use tracing::info;
-
-const ORIGIN: &str = "http://localhost:3000";
+use url::Url;
 
 #[derive(Serialize)]
 pub(crate) struct RegisterStartResponse {
@@ -31,6 +31,41 @@ pub(super) fn register_routes() -> Router<AppState> {
     Router::new()
         .route("/register-start", get(register_start))
         .route("/register-finish", post(register_finish))
+}
+
+#[derive(Clone)]
+pub struct RegistrationService {
+    origin: String,
+    relying_party_id: String,
+}
+
+impl RegistrationService {
+    pub(crate) fn new(origin: &str) -> Result<Self, IdentityError> {
+        let origin = origin.to_owned();
+        let as_url = Url::parse(&origin)
+            .map_err(|_| anyhow!("Could not parse origin '{origin}' as an URL"))?;
+        let relying_party_id = as_url
+            .host_str()
+            .ok_or_else(|| anyhow!("invalid origin '{origin}', no host part"))?;
+        let relying_party_id = relying_party_id.to_string();
+        Ok(Self {
+            origin,
+            relying_party_id,
+        })
+    }
+    fn validate(
+        &self,
+        credential: &RegisterPublicKeyCredential,
+        challenge: &[u8],
+    ) -> Result<(), IdentityError> {
+        Ok(credential.validate(challenge, &self.origin, &self.relying_party_id, true)?)
+    }
+}
+
+impl FromRef<AppState> for RegistrationService {
+    fn from_ref(input: &AppState) -> Self {
+        input.rs.deref().clone()
+    }
 }
 
 async fn register_start(
@@ -58,9 +93,10 @@ async fn register_start(
     }))
 }
 
-pub(super) async fn register_finish(
+async fn register_finish(
     session: Session,
     State(persistence_service): State<PersistenceService>,
+    State(registration_service): State<RegistrationService>,
     Json(credential): Json<Value>,
 ) -> Result<(), IdentityError> {
     let credential: RegisterPublicKeyCredential = (&credential).try_into()?;
@@ -83,7 +119,7 @@ pub(super) async fn register_finish(
         )));
     };
 
-    credential.validate(challenge, ORIGIN, "localhost", false)?;
+    registration_service.validate(&credential, &challenge)?;
     info!(
         "registered credential: {}",
         STANDARD_NO_PAD.encode(credential.id())

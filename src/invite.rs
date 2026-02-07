@@ -20,7 +20,6 @@ use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::borrow::Cow;
 use std::ops::Deref;
 use std::sync::Arc;
 use tower_sessions::Session;
@@ -86,14 +85,14 @@ pub struct InviteService {
     transport: Arc<AsyncSmtpTransport<Tokio1Executor>>,
     sender: Mailbox,
     email_templates: Arc<Handlebars<'static>>,
-    origin: Cow<'static, str>,
+    origin: String,
 }
 
 impl InviteService {
     pub fn new(
         persistence: Arc<PersistenceService>,
         config: &EmailConfig,
-        origin: Cow<'static, str>,
+        origin: &str,
     ) -> Result<Self, Fatal> {
         let mut builder = AsyncSmtpTransport::<Tokio1Executor>::relay(config.relay_host.as_str())
             .map_err(|e| Fatal::EmailTransport(e.into()))?;
@@ -103,6 +102,10 @@ impl InviteService {
                     "Email config sets email but not password"
                 )));
             };
+            info!(
+                "Connecting to mail server {} with user {}",
+                config.relay_host, user
+            );
             builder = builder.credentials(Credentials::new(user.clone(), password));
         }
         let sender_email = config.sender_email.as_str();
@@ -114,7 +117,7 @@ impl InviteService {
         );
         email_templates.register_template(
             "invite_html",
-            EmailTemplates::compile("invite_email.html.tmpl")?,
+            EmailTemplates::compile("invite_email.txt.tmpl")?,
         );
 
         Ok(Self {
@@ -127,7 +130,7 @@ impl InviteService {
                 )
             })?,
             email_templates: Arc::new(email_templates),
-            origin,
+            origin: origin.to_owned(),
         })
     }
 
