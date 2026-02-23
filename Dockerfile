@@ -22,5 +22,5 @@ FROM gcr.io/distroless/cc-debian13:nonroot
 
 COPY --from=builder /build/target/release/idelephant /
 
-CMD ["/idelephant"]
+ENTRYPOINT ["/idelephant"]
 
