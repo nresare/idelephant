@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-const ADDR: SocketAddr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 3000, 0, 0));
+const ADDR: SocketAddr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 8080, 0, 0));
 
 async fn run() -> Result<(), Fatal> {
     let cli = Cli::parse();
