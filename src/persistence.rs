@@ -154,6 +154,13 @@ pub async fn make_db(config: &PersistenceConfig) -> Result<Surreal<Any>, Identit
     Ok(db)
 }
 
+#[cfg(test)]
+pub async fn mem_db() -> Result<Surreal<Any>, IdentityError> {
+    let db = any::connect("mem://").await?;
+    setup_db(&db).await?;
+    Ok(db)
+}
+
 async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
     db.use_ns("default").use_db("idelephant").await?;
     db.query("DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE")
@@ -519,12 +526,9 @@ impl FromRef<AppState> for PersistenceService {
 #[cfg(test)]
 mod tests {
     use crate::error::IdentityError;
-    use crate::persistence::{setup_db, Credential, Identity, IdentityState, PersistenceService};
+    use crate::persistence::{mem_db, Credential, Identity, IdentityState, PersistenceService};
     use anyhow::Result;
     use chrono::{Duration, Utc};
-    use surrealdb::engine::any;
-    use surrealdb::engine::any::Any;
-    use surrealdb::Surreal;
 
     #[tokio::test]
     async fn test_persist() -> Result<()> {
@@ -724,11 +728,5 @@ mod tests {
         );
         assert_eq!(fetched.created_at, updated_at);
         Ok(())
-    }
-
-    async fn mem_db() -> std::result::Result<Surreal<Any>, IdentityError> {
-        let db = any::connect("mem://").await?;
-        setup_db(&db).await?;
-        Ok(db)
     }
 }
