@@ -1,20 +1,23 @@
 use crate::auth::IDENTITY;
 use crate::error::IdentityError;
 use crate::persistence::{Identity, OAuthClient, PersistenceService};
+use crate::util::Token;
 use crate::web::Templates;
 use crate::AppState;
-use axum::extract::{Query, State};
+use axum::extract::{Form, Query, State};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower_sessions::Session;
+use url::Url;
 
 pub fn oauth_routes() -> Router<AppState> {
     Router::new()
         .route("/authorize", get(authorize))
         .route("/authorize/resume", get(resume_authorize))
+        .route("/authorize/consent", post(authorize_consent))
 }
 
 pub const PENDING_AUTHORIZATION: &str = "idelephant.oauth.pending-authorization";
@@ -42,6 +45,11 @@ struct PendingAuthorizationRequest {
     code_challenge_method: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ConsentRequest {
+    decision: String,
+}
+
 async fn authorize(
     Query(request): Query<AuthorizationRequest>,
     session: Session,
@@ -58,7 +66,7 @@ async fn authorize(
     };
     let pending = validate_authorization_request(request, &client)?;
     session.insert(PENDING_AUTHORIZATION, &pending).await?;
-    continue_authorization(session, templates, &client, pending).await
+    continue_authorization(session, persistence_service, templates, &client, pending).await
 }
 
 async fn resume_authorize(
@@ -83,18 +91,115 @@ async fn resume_authorize(
         ));
     };
 
-    continue_authorization(session, templates, &client, pending).await
+    continue_authorization(session, persistence_service, templates, &client, pending).await
+}
+
+async fn authorize_consent(
+    session: Session,
+    State(persistence_service): State<PersistenceService>,
+    Form(consent): Form<ConsentRequest>,
+) -> Result<Redirect, IdentityError> {
+    let Some(identity): Option<Identity> = session.get(IDENTITY).await? else {
+        return Err(IdentityError::BadRequest(
+            "No authenticated identity found for authorization".to_string(),
+        ));
+    };
+    let Some(pending): Option<PendingAuthorizationRequest> =
+        session.get(PENDING_AUTHORIZATION).await?
+    else {
+        return Err(IdentityError::BadRequest(
+            "No pending authorization request".to_string(),
+        ));
+    };
+
+    if consent.decision == "deny" {
+        session
+            .remove::<PendingAuthorizationRequest>(PENDING_AUTHORIZATION)
+            .await?;
+        return Ok(Redirect::to(&build_redirect(
+            &pending.redirect_uri,
+            &[
+                ("error", Some("access_denied")),
+                ("state", pending.state.as_deref()),
+            ],
+        )?));
+    }
+    if consent.decision != "approve" {
+        return Err(IdentityError::BadRequest(
+            "Unknown authorization decision".to_string(),
+        ));
+    }
+
+    persistence_service
+        .grant_consent(
+            &identity.id()?,
+            &pending.client_id,
+            pending.scopes.clone(),
+            chrono::Utc::now(),
+        )
+        .await?;
+
+    let code = Token::random().base64();
+    persistence_service
+        .create_authorization_code(
+            &code,
+            &pending.client_id,
+            &identity.id()?,
+            &pending.redirect_uri,
+            pending.scopes.clone(),
+            pending.nonce.clone(),
+            &pending.code_challenge,
+            &pending.code_challenge_method,
+            chrono::Utc::now() + chrono::Duration::minutes(10),
+        )
+        .await?;
+    session
+        .remove::<PendingAuthorizationRequest>(PENDING_AUTHORIZATION)
+        .await?;
+
+    Ok(Redirect::to(&build_redirect(
+        &pending.redirect_uri,
+        &[("code", Some(&code)), ("state", pending.state.as_deref())],
+    )?))
 }
 
 async fn continue_authorization(
     session: Session,
+    persistence_service: PersistenceService,
     templates: Templates,
     client: &OAuthClient,
     pending: PendingAuthorizationRequest,
 ) -> Result<Response, IdentityError> {
-    let identity: Option<Identity> = session.get(IDENTITY).await?;
-    if identity.is_none() {
+    let Some(identity): Option<Identity> = session.get(IDENTITY).await? else {
         return Ok(Redirect::to("/").into_response());
+    };
+
+    let existing_consent = persistence_service
+        .fetch_consent_grant(&identity.id()?, &pending.client_id)
+        .await?;
+    if consent_satisfies_request(existing_consent.as_ref(), &pending.scopes) {
+        let code = Token::random().base64();
+        persistence_service
+            .create_authorization_code(
+                &code,
+                &pending.client_id,
+                &identity.id()?,
+                &pending.redirect_uri,
+                pending.scopes.clone(),
+                pending.nonce.clone(),
+                &pending.code_challenge,
+                &pending.code_challenge_method,
+                chrono::Utc::now() + chrono::Duration::minutes(10),
+            )
+            .await?;
+        session
+            .remove::<PendingAuthorizationRequest>(PENDING_AUTHORIZATION)
+            .await?;
+        return Ok(Redirect::to(&build_redirect(
+            &pending.redirect_uri,
+            &[("code", Some(&code)), ("state", pending.state.as_deref())],
+        )?)
+        .into_response());
     }
 
     let body = templates.render(
@@ -102,6 +207,7 @@ async fn continue_authorization(
         &json!({
             "client_name": client.name,
             "client_id": client.client_id,
+            "identity_email": identity.email,
             "redirect_uri": pending.redirect_uri,
             "scopes": pending.scopes,
             "state": pending.state,
@@ -179,11 +285,44 @@ fn parse_scopes(scope: &str) -> Result<Vec<String>, IdentityError> {
     Ok(scopes)
 }
 
+fn consent_satisfies_request(
+    consent: Option<&crate::persistence::ConsentGrant>,
+    requested_scopes: &[String],
+) -> bool {
+    let Some(consent) = consent else {
+        return false;
+    };
+    requested_scopes
+        .iter()
+        .all(|scope| consent.scopes.iter().any(|granted| granted == scope))
+}
+
+fn build_redirect(
+    redirect_uri: &str,
+    params: &[(&str, Option<&str>)],
+) -> Result<String, IdentityError> {
+    let mut redirect = Url::parse(redirect_uri)
+        .map_err(|e| IdentityError::BadRequest(format!("Invalid redirect URI: {e}")))?;
+    {
+        let mut pairs = redirect.query_pairs_mut();
+        for (key, value) in params {
+            if let Some(value) = value {
+                pairs.append_pair(key, value);
+            }
+        }
+    }
+    Ok(redirect.to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{validate_authorization_request, AuthorizationRequest};
+    use super::{
+        build_redirect, consent_satisfies_request, validate_authorization_request,
+        AuthorizationRequest,
+    };
     use crate::error::IdentityError;
-    use crate::persistence::OAuthClient;
+    use crate::persistence::{ConsentGrant, OAuthClient};
+    use chrono::Utc;
     use surrealdb::RecordId;
 
     fn client() -> OAuthClient {
@@ -252,5 +391,38 @@ mod tests {
 
         let err = validate_authorization_request(request, &client()).unwrap_err();
         assert!(matches!(err, IdentityError::BadRequest(_)));
+    }
+
+    #[test]
+    fn build_redirect_appends_code_and_state() {
+        let redirect = build_redirect(
+            "http://localhost:4000/callback",
+            &[("code", Some("code-123")), ("state", Some("state-123"))],
+        )
+        .unwrap();
+        assert_eq!(
+            redirect,
+            "http://localhost:4000/callback?code=code-123&state=state-123"
+        );
+    }
+
+    #[test]
+    fn consent_satisfies_request_requires_all_scopes() {
+        let consent = ConsentGrant {
+            subject_id: "identity:alice".to_string(),
+            client_id: "client-1".to_string(),
+            scopes: vec!["openid".to_string(), "email".to_string()],
+            created_at: Utc::now(),
+            id: RecordId::from(("consent_grant", "grant-1")),
+        };
+
+        assert!(consent_satisfies_request(
+            Some(&consent),
+            &["openid".to_string()]
+        ));
+        assert!(!consent_satisfies_request(
+            Some(&consent),
+            &["openid".to_string(), "profile".to_string()]
+        ));
     }
 }

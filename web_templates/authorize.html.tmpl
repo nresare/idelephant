@@ -7,9 +7,10 @@
         <main class="main">
             <section>
                 <h1>Authorize {{client_name}}</h1>
+                <p>Signed in as {{identity_email}}</p>
                 <p>Client ID: {{client_id}}</p>
                 <p>Redirect URI: {{redirect_uri}}</p>
-                <p>This authorization request has been validated and is waiting for the consent step.</p>
+                <p>This application is requesting access to the following scopes:</p>
                 <ul>
                     {{#each scopes}}
                     <li>{{this}}</li>
@@ -18,6 +19,10 @@
                 {{#if state}}
                 <p>State: {{state}}</p>
                 {{/if}}
+                <form action="/authorize/consent" method="post">
+                    <p><button type="submit" name="decision" value="approve">Approve</button></p>
+                    <p><button type="submit" name="decision" value="deny">Deny</button></p>
+                </form>
             </section>
         </main>
     </body>
