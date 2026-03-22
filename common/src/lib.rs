@@ -42,12 +42,11 @@ mod tests {
     use crate::{ToBoxedSlice, convert_key};
     use anyhow::Result;
     use hex_literal::hex;
-    use ssh_key::PublicKey;
 
     #[test]
     fn test_convert_key() -> Result<()> {
-        let key = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBMOmfeR5oaRJvme4/uFNitESVwdHwACESMqdTSxxIP+UytIBlUU+37/7qyCKkkRWFlvsRyjSQbfnLRE+UZTlH8Y=";
-        let ssh_key = PublicKey::from_openssh(key)?;
+        let key = "zq.luDCkyil5qf1qCJwm5lnSe97x5mROvXUMfwpOASJ0MgalZTIj";
+        let ssh_key = zqlu::parse(key)?;
         let public_key = convert_key(&ssh_key)?;
 
         let expected_bytes = hex!(

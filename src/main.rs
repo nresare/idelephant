@@ -25,7 +25,7 @@ use clap::Parser;
 use embed::StaticFile;
 use idelephant_common::{convert_key, ToBoxedSlice};
 use serde_json::json;
-use ssh_key::{HashAlg, PublicKey};
+use ssh_key::HashAlg;
 use std::io;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::Arc;
@@ -149,7 +149,7 @@ async fn build_app_state(config: &Config, db: &Surreal<Any>) -> Result<AppState,
         &config.origin,
     )?);
 
-    let key = PublicKey::from_openssh(&config.root_key).map_err(|e| Fatal::AdminKey(e.into()))?;
+    let key = zqlu::parse(&config.root_key).map_err(|e| Fatal::AdminKey(e.into()))?;
     let spki_bytes = convert_key(&key)?.to_boxed_slice();
     ps.configure_root_key(key.fingerprint(HashAlg::Sha256).as_bytes(), &spki_bytes)
         .await
