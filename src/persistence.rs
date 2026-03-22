@@ -59,6 +59,18 @@ struct NewAuthorizationCode {
     used_at: Option<DateTime<Utc>>,
 }
 
+pub struct CreateAuthorizationCode {
+    pub code_hash: String,
+    pub client_id: String,
+    pub subject_id: String,
+    pub redirect_uri: String,
+    pub scopes: Vec<String>,
+    pub nonce: Option<String>,
+    pub code_challenge: String,
+    pub code_challenge_method: String,
+    pub expires_at: DateTime<Utc>,
+}
+
 #[derive(Serialize)]
 struct NewAccessToken {
     token_hash: String,
@@ -247,29 +259,21 @@ impl PersistenceService {
 
     pub async fn create_authorization_code(
         &self,
-        code_hash: &str,
-        client_id: &str,
-        subject_id: &str,
-        redirect_uri: &str,
-        scopes: Vec<String>,
-        nonce: Option<String>,
-        code_challenge: &str,
-        code_challenge_method: &str,
-        expires_at: DateTime<Utc>,
+        code: CreateAuthorizationCode,
     ) -> Result<String, IdentityError> {
         let result: Record = self
             .db
             .create("authorization_code")
             .content(NewAuthorizationCode {
-                code_hash: code_hash.to_string(),
-                client_id: client_id.to_string(),
-                subject_id: subject_id.to_string(),
-                redirect_uri: redirect_uri.to_string(),
-                scopes,
-                nonce,
-                code_challenge: code_challenge.to_string(),
-                code_challenge_method: code_challenge_method.to_string(),
-                expires_at,
+                code_hash: code.code_hash,
+                client_id: code.client_id,
+                subject_id: code.subject_id,
+                redirect_uri: code.redirect_uri,
+                scopes: code.scopes,
+                nonce: code.nonce,
+                code_challenge: code.code_challenge,
+                code_challenge_method: code.code_challenge_method,
+                expires_at: code.expires_at,
                 used_at: None,
             })
             .await?
@@ -522,7 +526,9 @@ impl FromRef<AppState> for PersistenceService {
 #[cfg(test)]
 mod tests {
     use crate::error::IdentityError;
-    use crate::persistence::{mem_db, Credential, Identity, IdentityState, PersistenceService};
+    use crate::persistence::{
+        mem_db, CreateAuthorizationCode, Credential, Identity, IdentityState, PersistenceService,
+    };
     use anyhow::Result;
     use chrono::{Duration, Utc};
 
@@ -619,17 +625,17 @@ mod tests {
         let expires_at = Utc::now() + Duration::minutes(5);
         let scopes = vec!["openid".to_string(), "email".to_string()];
         let nonce = Some("nonce-123".to_string());
-        ps.create_authorization_code(
-            "code-hash",
-            "client-1",
-            "identity:alice",
-            "http://localhost:4000/callback",
-            scopes.clone(),
-            nonce.clone(),
-            "challenge",
-            "S256",
+        ps.create_authorization_code(CreateAuthorizationCode {
+            code_hash: "code-hash".to_string(),
+            client_id: "client-1".to_string(),
+            subject_id: "identity:alice".to_string(),
+            redirect_uri: "http://localhost:4000/callback".to_string(),
+            scopes: scopes.clone(),
+            nonce: nonce.clone(),
+            code_challenge: "challenge".to_string(),
+            code_challenge_method: "S256".to_string(),
             expires_at,
-        )
+        })
         .await?;
         let fetched = ps.fetch_authorization_code("code-hash").await?.unwrap();
         assert_eq!(fetched.code_hash, "code-hash");

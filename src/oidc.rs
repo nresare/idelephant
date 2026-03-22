@@ -115,6 +115,16 @@ impl OidcService {
         }
     }
 
+    pub fn issuer_basename(&self) -> &str {
+        self.issuer
+            .split("://")
+            .nth(1)
+            .unwrap_or(&self.issuer)
+            .split('/')
+            .next()
+            .unwrap_or(&self.issuer)
+    }
+
     pub fn jwks(&self) -> JwksResponse {
         self.jwks.clone()
     }
