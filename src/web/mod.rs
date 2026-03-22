@@ -16,6 +16,7 @@ impl Templates {
     pub fn new() -> Result<Self, Fatal> {
         let mut registry = Handlebars::new();
         registry.register_template("accept", WebTemplates::compile("accept.html.tmpl")?);
+        registry.register_template("authorize", WebTemplates::compile("authorize.html.tmpl")?);
         registry.register_template("index", WebTemplates::compile("index.html.tmpl")?);
         Ok(Self {
             registry: Arc::new(registry),
