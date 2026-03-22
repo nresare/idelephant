@@ -41,15 +41,13 @@ enum Command {
     },
     #[command()]
     /// Configure an OAuth/OIDC client on this idElephant instance
-    CreateClient {
+    RegisterClient {
         #[arg()]
         client_id: String,
         #[arg()]
         name: String,
         #[arg(long = "redirect-uri", required = true)]
         redirect_uris: Vec<String>,
-        #[arg(long = "scope", required = true)]
-        scopes: Vec<String>,
         #[arg(long = "pkce-required", default_value_t = true)]
         pkce_required: bool,
     },
@@ -80,11 +78,10 @@ fn main() -> anyhow::Result<()> {
             let mut key = P256Random::new();
             register_public_key(&client, &mut key, &email)?;
         }
-        Command::CreateClient {
+        Command::RegisterClient {
             client_id,
             name,
             redirect_uris,
-            scopes,
             pkce_required,
         } => {
             info!("Creating OAuth client '{}'", client_id);
@@ -94,7 +91,6 @@ fn main() -> anyhow::Result<()> {
                     client_id,
                     name,
                     redirect_uris,
-                    scopes,
                     pkce_required,
                 },
             )?;
@@ -114,7 +110,6 @@ struct CreateClientRequest {
     client_id: String,
     name: String,
     redirect_uris: Vec<String>,
-    scopes: Vec<String>,
     pkce_required: bool,
 }
 

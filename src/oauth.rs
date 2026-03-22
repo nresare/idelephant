@@ -77,7 +77,6 @@ struct CreateOAuthClientRequest {
     client_id: String,
     name: String,
     redirect_uris: Vec<String>,
-    scopes: Vec<String>,
     pkce_required: bool,
 }
 
@@ -114,7 +113,6 @@ async fn create_oauth_client(
             &request.client_id,
             &request.name,
             request.redirect_uris,
-            request.scopes,
             request.pkce_required,
         )
         .await?;
@@ -416,9 +414,9 @@ fn validate_authorization_request(
     }
     let scopes = parse_scopes(&request.scope)?;
     for scope in &scopes {
-        if !client.scopes.contains(scope) {
+        if !allowed_scopes().iter().any(|allowed| allowed == scope) {
             return Err(IdentityError::BadRequest(format!(
-                "scope '{scope}' is not allowed for this client"
+                "scope '{scope}' is not supported"
             )));
         }
     }
@@ -529,17 +527,11 @@ fn validate_client_registration_request(
             IdentityError::BadRequest(format!("Invalid redirect URI '{redirect_uri}': {e}"))
         })?;
     }
-    if request.scopes.is_empty() {
-        return Err(IdentityError::BadRequest(
-            "At least one scope is required".to_string(),
-        ));
-    }
-    if !request.scopes.iter().any(|scope| scope == "openid") {
-        return Err(IdentityError::BadRequest(
-            "Configured scopes must include 'openid'".to_string(),
-        ));
-    }
     Ok(())
+}
+
+fn allowed_scopes() -> [&'static str; 3] {
+    ["openid", "profile", "email"]
 }
 
 fn verify_pkce(code_verifier: &str, expected_challenge: &str) -> bool {
@@ -663,7 +655,6 @@ mod tests {
             client_id: "client-1".to_string(),
             name: "Example client".to_string(),
             redirect_uris: vec!["http://localhost:4000/callback".to_string()],
-            scopes: vec!["openid".to_string(), "email".to_string()],
             pkce_required: true,
             id: RecordId::from(("oauth_client", "client-1")),
         }
@@ -881,7 +872,6 @@ mod tests {
                 "client-1",
                 "Example client",
                 vec!["http://localhost:4000/callback".to_string()],
-                vec!["openid".to_string(), "email".to_string()],
                 true,
             )
             .await?;
@@ -1065,7 +1055,6 @@ mod tests {
                         client_id: "configured-client".to_string(),
                         name: "Configured Client".to_string(),
                         redirect_uris: vec!["http://localhost:4000/callback".to_string()],
-                        scopes: vec!["openid".to_string(), "email".to_string()],
                         pkce_required: true,
                     })?))?,
             )
