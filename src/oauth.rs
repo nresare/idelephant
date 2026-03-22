@@ -1,6 +1,6 @@
 use crate::auth::IDENTITY;
 use crate::error::IdentityError;
-use crate::persistence::{Identity, OAuthClient, PersistenceService};
+use crate::persistence::{AuthorizationCode, Identity, OAuthClient, PersistenceService};
 use crate::util::Token;
 use crate::web::Templates;
 use crate::AppState;
@@ -8,8 +8,11 @@ use axum::extract::{Form, Query, State};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tower_sessions::Session;
 use url::Url;
 
@@ -18,6 +21,7 @@ pub fn oauth_routes() -> Router<AppState> {
         .route("/authorize", get(authorize))
         .route("/authorize/resume", get(resume_authorize))
         .route("/authorize/consent", post(authorize_consent))
+        .route("/token", post(token))
 }
 
 pub const PENDING_AUTHORIZATION: &str = "idelephant.oauth.pending-authorization";
@@ -48,6 +52,23 @@ struct PendingAuthorizationRequest {
 #[derive(Debug, Deserialize)]
 struct ConsentRequest {
     decision: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenRequest {
+    grant_type: String,
+    code: String,
+    redirect_uri: String,
+    client_id: String,
+    code_verifier: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TokenResponse {
+    access_token: String,
+    token_type: String,
+    expires_in: i64,
+    scope: String,
 }
 
 async fn authorize(
@@ -161,6 +182,64 @@ async fn authorize_consent(
         &pending.redirect_uri,
         &[("code", Some(&code)), ("state", pending.state.as_deref())],
     )?))
+}
+
+async fn token(
+    State(persistence_service): State<PersistenceService>,
+    Form(request): Form<TokenRequest>,
+) -> Result<axum::Json<TokenResponse>, IdentityError> {
+    if request.grant_type != "authorization_code" {
+        return Err(IdentityError::BadRequest(
+            "Only grant_type=authorization_code is supported".to_string(),
+        ));
+    }
+
+    let Some(code) = persistence_service
+        .fetch_authorization_code(&request.code)
+        .await?
+    else {
+        return Err(IdentityError::BadRequest(
+            "Unknown authorization code".to_string(),
+        ));
+    };
+
+    validate_token_request(&request, &code)?;
+
+    let Some(client) = persistence_service
+        .fetch_oauth_client(&request.client_id)
+        .await?
+    else {
+        return Err(IdentityError::BadRequest(
+            "Unknown OAuth client".to_string(),
+        ));
+    };
+    if client.pkce_required && !verify_pkce(&request.code_verifier, &code.code_challenge) {
+        return Err(IdentityError::BadRequest(
+            "code_verifier did not match the PKCE challenge".to_string(),
+        ));
+    }
+
+    let access_token = Token::random().base64();
+    let expires_in = chrono::Duration::hours(1);
+    persistence_service
+        .create_access_token(
+            &access_token,
+            &code.client_id,
+            &code.subject_id,
+            code.scopes.clone(),
+            chrono::Utc::now() + expires_in,
+        )
+        .await?;
+    persistence_service
+        .mark_authorization_code_used(&request.code, chrono::Utc::now())
+        .await?;
+
+    Ok(axum::Json(TokenResponse {
+        access_token,
+        token_type: "Bearer".to_string(),
+        expires_in: expires_in.num_seconds(),
+        scope: code.scopes.join(" "),
+    }))
 }
 
 async fn continue_authorization(
@@ -285,6 +364,48 @@ fn parse_scopes(scope: &str) -> Result<Vec<String>, IdentityError> {
     Ok(scopes)
 }
 
+fn validate_token_request(
+    request: &TokenRequest,
+    code: &AuthorizationCode,
+) -> Result<(), IdentityError> {
+    if code.client_id != request.client_id {
+        return Err(IdentityError::BadRequest(
+            "authorization code was not issued to this client".to_string(),
+        ));
+    }
+    if code.redirect_uri != request.redirect_uri {
+        return Err(IdentityError::BadRequest(
+            "redirect_uri did not match the authorization request".to_string(),
+        ));
+    }
+    if code.used_at.is_some() {
+        return Err(IdentityError::BadRequest(
+            "authorization code has already been used".to_string(),
+        ));
+    }
+    if code.expires_at < chrono::Utc::now() {
+        return Err(IdentityError::BadRequest(
+            "authorization code has expired".to_string(),
+        ));
+    }
+    if code.code_challenge_method != "S256" {
+        return Err(IdentityError::BadRequest(
+            "Unsupported code_challenge_method".to_string(),
+        ));
+    }
+    if request.code_verifier.is_empty() {
+        return Err(IdentityError::BadRequest(
+            "code_verifier must not be empty".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_pkce(code_verifier: &str, expected_challenge: &str) -> bool {
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
+    challenge == expected_challenge
+}
+
 fn consent_satisfies_request(
     consent: Option<&crate::persistence::ConsentGrant>,
     requested_scopes: &[String],
@@ -318,11 +439,14 @@ fn build_redirect(
 mod tests {
     use super::{
         build_redirect, consent_satisfies_request, validate_authorization_request,
-        AuthorizationRequest,
+        validate_token_request, verify_pkce, AuthorizationRequest, TokenRequest,
     };
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
     use crate::error::IdentityError;
-    use crate::persistence::{ConsentGrant, OAuthClient};
-    use chrono::Utc;
+    use crate::persistence::{AuthorizationCode, ConsentGrant, OAuthClient};
+    use chrono::{Duration, Utc};
+    use sha2::{Digest, Sha256};
     use surrealdb::RecordId;
 
     fn client() -> OAuthClient {
@@ -393,6 +517,32 @@ mod tests {
         assert!(matches!(err, IdentityError::BadRequest(_)));
     }
 
+    fn token_request() -> TokenRequest {
+        TokenRequest {
+            grant_type: "authorization_code".to_string(),
+            code: "code-123".to_string(),
+            redirect_uri: "http://localhost:4000/callback".to_string(),
+            client_id: "client-1".to_string(),
+            code_verifier: "verifier-123".to_string(),
+        }
+    }
+
+    fn authorization_code(code_challenge: String) -> AuthorizationCode {
+        AuthorizationCode {
+            code_hash: "code-123".to_string(),
+            client_id: "client-1".to_string(),
+            subject_id: "identity:alice".to_string(),
+            redirect_uri: "http://localhost:4000/callback".to_string(),
+            scopes: vec!["openid".to_string(), "email".to_string()],
+            nonce: Some("nonce-123".to_string()),
+            code_challenge,
+            code_challenge_method: "S256".to_string(),
+            expires_at: Utc::now() + Duration::minutes(5),
+            used_at: None,
+            id: RecordId::from(("authorization_code", "code-123")),
+        }
+    }
+
     #[test]
     fn build_redirect_appends_code_and_state() {
         let redirect = build_redirect(
@@ -424,5 +574,32 @@ mod tests {
             Some(&consent),
             &["openid".to_string(), "profile".to_string()]
         ));
+    }
+
+    #[test]
+    fn verify_pkce_accepts_matching_verifier() {
+        let verifier = "verifier-123";
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        assert!(verify_pkce(verifier, &challenge));
+    }
+
+    #[test]
+    fn validate_token_request_rejects_reused_code() {
+        let request = token_request();
+        let mut code = authorization_code("challenge".to_string());
+        code.used_at = Some(Utc::now());
+
+        let err = validate_token_request(&request, &code).unwrap_err();
+        assert!(matches!(err, IdentityError::BadRequest(_)));
+    }
+
+    #[test]
+    fn validate_token_request_rejects_expired_code() {
+        let request = token_request();
+        let mut code = authorization_code("challenge".to_string());
+        code.expires_at = Utc::now() - Duration::seconds(1);
+
+        let err = validate_token_request(&request, &code).unwrap_err();
+        assert!(matches!(err, IdentityError::BadRequest(_)));
     }
 }
