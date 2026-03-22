@@ -9,6 +9,7 @@ anyhow = {workspace = true}
 const-oid = { version = "0.9.6", features = ["db"] }
 spki = {workspace = true}
 ssh-key = "0.6.7"
+zqlu = "0.2.2"
 
 [dev-dependencies]
 hex-literal = { workspace = true}

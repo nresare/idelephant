@@ -1,5 +1,4 @@
-root_key = """ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBMOmfeR5oaRJvme4/uFNitESVw\
-dHwACESMqdTSxxIP+UytIBlUU+37/7qyCKkkRWFlvsRyjSQbfnLRE+UZTlH8Y="""
+root_key = "zq.luDCkyil5qf1qCJwm5lnSe97x5mROvXUMfwpOASJ0MgalZTIj"
 
 db_path = "/tmp/db"
 
