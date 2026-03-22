@@ -4,6 +4,7 @@ mod config;
 mod embed;
 mod error;
 mod invite;
+mod oauth;
 mod persistence;
 mod register;
 mod root_setup;
@@ -14,6 +15,7 @@ use crate::auth::{auth_routes, IDENTITY};
 use crate::config::Config;
 use crate::error::IdentityError;
 use crate::invite::{invite_routes, InviteService};
+use crate::oauth::{oauth_routes, PENDING_AUTHORIZATION};
 use crate::persistence::{make_db, Identity, PersistenceService};
 use crate::register::{register_routes, RegistrationService};
 use crate::web::Templates;
@@ -117,6 +119,7 @@ async fn run() -> Result<(), Fatal> {
         .merge(register_routes())
         .merge(auth_routes())
         .merge(invite_routes())
+        .merge(oauth_routes())
         .fallback_service(get(not_found))
         .layer(make_session_layer(db))
         .layer(
@@ -188,7 +191,14 @@ async fn index_handler(
     session: Session,
 ) -> Result<Html<String>, IdentityError> {
     let id: Option<Identity> = session.get(IDENTITY).await?;
-    Ok(Html(templates.render("index", &json!({"identity": id}))?))
+    let pending_authorization: bool = session
+        .get::<serde_json::Value>(PENDING_AUTHORIZATION)
+        .await?
+        .is_some();
+    Ok(Html(templates.render(
+        "index",
+        &json!({"identity": id, "pending_authorization": pending_authorization}),
+    )?))
 }
 
 async fn logout_handler(session: Session) -> Result<StatusCode, IdentityError> {

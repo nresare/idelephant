@@ -26,6 +26,7 @@
     <script src="static/script.js">
     </script>
     <script>
+    window.idElephantPendingAuthorization = {{#if pending_authorization}}true{{else}}false{{/if}};
     {{#if identity}}
     document.getElementById("logout").addEventListener("click", logout)
     {{else}}

@@ -25,7 +25,11 @@ async function authenticate() {
             return fetch("/auth-finish", options)
         })
     if (auth_result.ok) {
-        location.reload()
+        if (window.idElephantPendingAuthorization) {
+            location.href = "/authorize/resume"
+        } else {
+            location.reload()
+        }
     } else {
         alert("something went wrong: " + auth_result.status);
     }

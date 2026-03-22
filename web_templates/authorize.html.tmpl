@@ -1,0 +1,24 @@
+<html lang="en">
+    <head>
+        <title>Authorize application</title>
+        <link rel="stylesheet" href="/static/index.css"/>
+    </head>
+    <body>
+        <main class="main">
+            <section>
+                <h1>Authorize {{client_name}}</h1>
+                <p>Client ID: {{client_id}}</p>
+                <p>Redirect URI: {{redirect_uri}}</p>
+                <p>This authorization request has been validated and is waiting for the consent step.</p>
+                <ul>
+                    {{#each scopes}}
+                    <li>{{this}}</li>
+                    {{/each}}
+                </ul>
+                {{#if state}}
+                <p>State: {{state}}</p>
+                {{/if}}
+            </section>
+        </main>
+    </body>
+</html>
