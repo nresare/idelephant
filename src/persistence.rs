@@ -37,6 +37,46 @@ struct Record {
     id: RecordId,
 }
 
+#[derive(Serialize)]
+struct NewOAuthClient {
+    client_id: String,
+    name: String,
+    redirect_uris: Vec<String>,
+    scopes: Vec<String>,
+    pkce_required: bool,
+}
+
+#[derive(Serialize)]
+struct NewAuthorizationCode {
+    code_hash: String,
+    client_id: String,
+    subject_id: String,
+    redirect_uri: String,
+    scopes: Vec<String>,
+    nonce: Option<String>,
+    code_challenge: String,
+    code_challenge_method: String,
+    expires_at: DateTime<Utc>,
+    used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize)]
+struct NewAccessToken {
+    token_hash: String,
+    client_id: String,
+    subject_id: String,
+    scopes: Vec<String>,
+    expires_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct NewConsentGrant {
+    subject_id: String,
+    client_id: String,
+    scopes: Vec<String>,
+    created_at: DateTime<Utc>,
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
 pub enum IdentityState {
     Allocated { challenge: Vec<u8> },
@@ -50,6 +90,50 @@ pub struct Credential {
     pub public_key: Vec<u8>,
     pub public_key_algorithm: i32,
     pub sign_count: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
+pub struct OAuthClient {
+    pub client_id: String,
+    pub name: String,
+    pub redirect_uris: Vec<String>,
+    pub scopes: Vec<String>,
+    pub pkce_required: bool,
+    pub id: RecordId,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
+pub struct AuthorizationCode {
+    pub code_hash: String,
+    pub client_id: String,
+    pub subject_id: String,
+    pub redirect_uri: String,
+    pub scopes: Vec<String>,
+    pub nonce: Option<String>,
+    pub code_challenge: String,
+    pub code_challenge_method: String,
+    pub expires_at: DateTime<Utc>,
+    pub used_at: Option<DateTime<Utc>>,
+    pub id: RecordId,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
+pub struct AccessToken {
+    pub token_hash: String,
+    pub client_id: String,
+    pub subject_id: String,
+    pub scopes: Vec<String>,
+    pub expires_at: DateTime<Utc>,
+    pub id: RecordId,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
+pub struct ConsentGrant {
+    pub subject_id: String,
+    pub client_id: String,
+    pub scopes: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub id: RecordId,
 }
 
 #[derive(Clone)]
@@ -75,6 +159,16 @@ async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
     db.query("DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE")
         .query(
             "DEFINE INDEX IF NOT EXISTS inviteToken ON identity FIELDS state.Invited.token UNIQUE",
+        )
+        .query("DEFINE INDEX IF NOT EXISTS oauthClientId ON oauth_client FIELDS client_id UNIQUE")
+        .query(
+            "DEFINE INDEX IF NOT EXISTS authorizationCodeHash ON authorization_code FIELDS code_hash UNIQUE",
+        )
+        .query(
+            "DEFINE INDEX IF NOT EXISTS accessTokenHash ON access_token FIELDS token_hash UNIQUE",
+        )
+        .query(
+            "DEFINE INDEX IF NOT EXISTS consentGrantBySubjectClient ON consent_grant FIELDS subject_id, client_id UNIQUE",
         )
         .await?;
     Ok(())
@@ -111,6 +205,203 @@ impl PersistenceService {
 
     pub async fn fetch_identity(&self, id: &str) -> Result<Option<Identity>, IdentityError> {
         Ok(self.db.select(("identity", id)).await?)
+    }
+
+    pub async fn create_oauth_client(
+        &self,
+        client_id: &str,
+        name: &str,
+        redirect_uris: Vec<String>,
+        scopes: Vec<String>,
+        pkce_required: bool,
+    ) -> Result<String, IdentityError> {
+        let result: Record = self
+            .db
+            .create("oauth_client")
+            .content(NewOAuthClient {
+                client_id: client_id.to_string(),
+                name: name.to_string(),
+                redirect_uris,
+                scopes,
+                pkce_required,
+            })
+            .await?
+            .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
+        Ok(result.id.key().to_string())
+    }
+
+    pub async fn fetch_oauth_client(
+        &self,
+        client_id: &str,
+    ) -> Result<Option<OAuthClient>, IdentityError> {
+        let mut result = self
+            .db
+            .query("SELECT * FROM oauth_client WHERE client_id = $client_id LIMIT 1")
+            .bind(("client_id", client_id.to_string()))
+            .await?;
+        Ok(result.take(0)?)
+    }
+
+    pub async fn create_authorization_code(
+        &self,
+        code_hash: &str,
+        client_id: &str,
+        subject_id: &str,
+        redirect_uri: &str,
+        scopes: Vec<String>,
+        nonce: Option<String>,
+        code_challenge: &str,
+        code_challenge_method: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<String, IdentityError> {
+        let result: Record = self
+            .db
+            .create("authorization_code")
+            .content(NewAuthorizationCode {
+                code_hash: code_hash.to_string(),
+                client_id: client_id.to_string(),
+                subject_id: subject_id.to_string(),
+                redirect_uri: redirect_uri.to_string(),
+                scopes,
+                nonce,
+                code_challenge: code_challenge.to_string(),
+                code_challenge_method: code_challenge_method.to_string(),
+                expires_at,
+                used_at: None,
+            })
+            .await?
+            .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
+        Ok(result.id.key().to_string())
+    }
+
+    pub async fn fetch_authorization_code(
+        &self,
+        code_hash: &str,
+    ) -> Result<Option<AuthorizationCode>, IdentityError> {
+        let mut result = self
+            .db
+            .query("SELECT * FROM authorization_code WHERE code_hash = $code_hash LIMIT 1")
+            .bind(("code_hash", code_hash.to_string()))
+            .await?;
+        Ok(result.take(0)?)
+    }
+
+    pub async fn mark_authorization_code_used(
+        &self,
+        code_hash: &str,
+        used_at: DateTime<Utc>,
+    ) -> Result<bool, IdentityError> {
+        let Some(mut code) = self.fetch_authorization_code(code_hash).await? else {
+            return Ok(false);
+        };
+        code.used_at = Some(used_at);
+        let result: Option<AuthorizationCode> = self
+            .db
+            .update(code.id.clone())
+            .content(NewAuthorizationCode {
+                code_hash: code.code_hash,
+                client_id: code.client_id,
+                subject_id: code.subject_id,
+                redirect_uri: code.redirect_uri,
+                scopes: code.scopes,
+                nonce: code.nonce,
+                code_challenge: code.code_challenge,
+                code_challenge_method: code.code_challenge_method,
+                expires_at: code.expires_at,
+                used_at: code.used_at,
+            })
+            .await?;
+        Ok(result.is_some())
+    }
+
+    pub async fn create_access_token(
+        &self,
+        token_hash: &str,
+        client_id: &str,
+        subject_id: &str,
+        scopes: Vec<String>,
+        expires_at: DateTime<Utc>,
+    ) -> Result<String, IdentityError> {
+        let result: Record = self
+            .db
+            .create("access_token")
+            .content(NewAccessToken {
+                token_hash: token_hash.to_string(),
+                client_id: client_id.to_string(),
+                subject_id: subject_id.to_string(),
+                scopes,
+                expires_at,
+            })
+            .await?
+            .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
+        Ok(result.id.key().to_string())
+    }
+
+    pub async fn fetch_access_token(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<AccessToken>, IdentityError> {
+        let mut result = self
+            .db
+            .query("SELECT * FROM access_token WHERE token_hash = $token_hash LIMIT 1")
+            .bind(("token_hash", token_hash.to_string()))
+            .await?;
+        Ok(result.take(0)?)
+    }
+
+    pub async fn grant_consent(
+        &self,
+        subject_id: &str,
+        client_id: &str,
+        scopes: Vec<String>,
+        created_at: DateTime<Utc>,
+    ) -> Result<String, IdentityError> {
+        let existing = self.fetch_consent_grant(subject_id, client_id).await?;
+        if let Some(existing) = existing {
+            let updated: Option<ConsentGrant> = self
+                .db
+                .update(existing.id)
+                .content(NewConsentGrant {
+                    subject_id: subject_id.to_string(),
+                    client_id: client_id.to_string(),
+                    scopes,
+                    created_at,
+                })
+                .await?;
+            let updated = updated.ok_or_else(|| {
+                Logic("db.update succeeded but returned None for consent grant".to_string())
+            })?;
+            return Ok(updated.id.key().to_string());
+        }
+
+        let result: Record = self
+            .db
+            .create("consent_grant")
+            .content(NewConsentGrant {
+                subject_id: subject_id.to_string(),
+                client_id: client_id.to_string(),
+                scopes,
+                created_at,
+            })
+            .await?
+            .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
+        Ok(result.id.key().to_string())
+    }
+
+    pub async fn fetch_consent_grant(
+        &self,
+        subject_id: &str,
+        client_id: &str,
+    ) -> Result<Option<ConsentGrant>, IdentityError> {
+        let mut result = self
+            .db
+            .query(
+                "SELECT * FROM consent_grant WHERE subject_id = $subject_id AND client_id = $client_id LIMIT 1",
+            )
+            .bind(("subject_id", subject_id.to_string()))
+            .bind(("client_id", client_id.to_string()))
+            .await?;
+        Ok(result.take(0)?)
     }
 
     pub async fn update_identity(&self, identity: &Identity) -> Result<bool, IdentityError> {
@@ -230,7 +521,7 @@ mod tests {
     use crate::error::IdentityError;
     use crate::persistence::{setup_db, Credential, Identity, IdentityState, PersistenceService};
     use anyhow::Result;
-    use chrono::Utc;
+    use chrono::{Duration, Utc};
     use surrealdb::engine::any;
     use surrealdb::engine::any::Any;
     use surrealdb::Surreal;
@@ -302,6 +593,136 @@ mod tests {
         let result = ps.create_invite("some-email", false).await;
         assert!(matches!(result, Err(IdentityError::EmailAlreadyInUse)));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_persist_oauth_client() -> Result<()> {
+        let db = mem_db().await?;
+        let ps = PersistenceService::new(db);
+        let redirect_uris = vec!["http://localhost:4000/callback".to_string()];
+        let scopes = vec!["openid".to_string(), "email".to_string()];
+
+        ps.create_oauth_client(
+            "client-1",
+            "Example client",
+            redirect_uris.clone(),
+            scopes.clone(),
+            true,
+        )
+        .await?;
+        let fetched = ps.fetch_oauth_client("client-1").await?.unwrap();
+        assert_eq!(fetched.client_id, "client-1");
+        assert_eq!(fetched.name, "Example client");
+        assert_eq!(fetched.redirect_uris, redirect_uris);
+        assert_eq!(fetched.scopes, scopes);
+        assert!(fetched.pkce_required);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_persist_authorization_code_and_mark_used() -> Result<()> {
+        let db = mem_db().await?;
+        let ps = PersistenceService::new(db);
+        let expires_at = Utc::now() + Duration::minutes(5);
+        let scopes = vec!["openid".to_string(), "email".to_string()];
+        let nonce = Some("nonce-123".to_string());
+        ps.create_authorization_code(
+            "code-hash",
+            "client-1",
+            "identity:alice",
+            "http://localhost:4000/callback",
+            scopes.clone(),
+            nonce.clone(),
+            "challenge",
+            "S256",
+            expires_at,
+        )
+        .await?;
+        let fetched = ps.fetch_authorization_code("code-hash").await?.unwrap();
+        assert_eq!(fetched.code_hash, "code-hash");
+        assert_eq!(fetched.client_id, "client-1");
+        assert_eq!(fetched.subject_id, "identity:alice");
+        assert_eq!(fetched.redirect_uri, "http://localhost:4000/callback");
+        assert_eq!(fetched.scopes, scopes);
+        assert_eq!(fetched.nonce, nonce);
+        assert_eq!(fetched.code_challenge, "challenge");
+        assert_eq!(fetched.code_challenge_method, "S256");
+        assert_eq!(fetched.expires_at, expires_at);
+        assert!(fetched.used_at.is_none());
+
+        let used_at = Utc::now();
+        assert!(
+            ps.mark_authorization_code_used("code-hash", used_at)
+                .await?
+        );
+        let fetched = ps.fetch_authorization_code("code-hash").await?.unwrap();
+        assert_eq!(fetched.used_at, Some(used_at));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_persist_access_token() -> Result<()> {
+        let db = mem_db().await?;
+        let ps = PersistenceService::new(db);
+        let scopes = vec!["openid".to_string()];
+        let expires_at = Utc::now() + Duration::minutes(10);
+        ps.create_access_token(
+            "token-hash",
+            "client-1",
+            "identity:alice",
+            scopes.clone(),
+            expires_at,
+        )
+        .await?;
+        let fetched = ps.fetch_access_token("token-hash").await?.unwrap();
+        assert_eq!(fetched.token_hash, "token-hash");
+        assert_eq!(fetched.client_id, "client-1");
+        assert_eq!(fetched.subject_id, "identity:alice");
+        assert_eq!(fetched.scopes, scopes);
+        assert_eq!(fetched.expires_at, expires_at);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_consent_grant() -> Result<()> {
+        let db = mem_db().await?;
+        let ps = PersistenceService::new(db);
+        let created_at = Utc::now();
+        let first_id = ps
+            .grant_consent(
+                "identity:alice",
+                "client-1",
+                vec!["openid".to_string()],
+                created_at,
+            )
+            .await?;
+        let fetched = ps
+            .fetch_consent_grant("identity:alice", "client-1")
+            .await?
+            .unwrap();
+        assert_eq!(fetched.scopes, vec!["openid".to_string()]);
+
+        let updated_at = created_at + Duration::seconds(1);
+        let second_id = ps
+            .grant_consent(
+                "identity:alice",
+                "client-1",
+                vec!["openid".to_string(), "email".to_string()],
+                updated_at,
+            )
+            .await?;
+        assert_eq!(first_id, second_id);
+
+        let fetched = ps
+            .fetch_consent_grant("identity:alice", "client-1")
+            .await?
+            .unwrap();
+        assert_eq!(
+            fetched.scopes,
+            vec!["openid".to_string(), "email".to_string()]
+        );
+        assert_eq!(fetched.created_at, updated_at);
         Ok(())
     }
 
