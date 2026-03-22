@@ -5,6 +5,7 @@ mod embed;
 mod error;
 mod invite;
 mod oauth;
+mod oidc;
 mod persistence;
 mod register;
 mod root_setup;
@@ -16,6 +17,7 @@ use crate::config::Config;
 use crate::error::IdentityError;
 use crate::invite::{invite_routes, InviteService};
 use crate::oauth::{oauth_routes, PENDING_AUTHORIZATION};
+use crate::oidc::OidcService;
 use crate::persistence::{make_db, Identity, PersistenceService};
 use crate::register::{register_routes, RegistrationService};
 use crate::web::Templates;
@@ -159,11 +161,13 @@ async fn build_app_state(config: &Config, db: &Surreal<Any>) -> Result<AppState,
         .map_err(|e| Fatal::AdminKey(e.into()))?;
 
     let templates = Arc::new(Templates::new()?);
+    let oidc = Arc::new(OidcService::new(&config.origin).map_err(Fatal::Other)?);
 
     let state = AppState {
         ps,
         is,
         templates,
+        oidc,
         rs,
     };
     Ok(state)
@@ -181,6 +185,7 @@ struct AppState {
     ps: Arc<PersistenceService>,
     is: Arc<InviteService>,
     templates: Arc<Templates>,
+    oidc: Arc<OidcService>,
     rs: Arc<RegistrationService>,
 }
 
