@@ -2276,6 +2276,7 @@ dependencies = [
  "time",
  "tokio",
  "toml",
+ "tower",
  "tower-http",
  "tower-sessions",
  "tower-sessions-surrealdb-store",

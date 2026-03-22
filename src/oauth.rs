@@ -9,7 +9,7 @@ use axum::extract::{Form, Query, State};
 use axum::http::{header, HeaderMap};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,7 @@ pub fn oauth_routes() -> Router<AppState> {
         .route("/authorize/resume", get(resume_authorize))
         .route("/authorize/consent", post(authorize_consent))
         .route("/token", post(token))
+        .route("/oauth-client", post(create_oauth_client))
         .route("/userinfo", get(userinfo))
         .route(
             "/.well-known/openid-configuration",
@@ -71,6 +72,15 @@ struct TokenRequest {
     code_verifier: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct CreateOAuthClientRequest {
+    client_id: String,
+    name: String,
+    redirect_uris: Vec<String>,
+    scopes: Vec<String>,
+    pkce_required: bool,
+}
+
 #[derive(Debug, Serialize)]
 struct TokenResponse {
     access_token: String,
@@ -85,6 +95,30 @@ struct TokenResponse {
 struct UserinfoResponse {
     sub: String,
     email: String,
+}
+
+async fn create_oauth_client(
+    session: Session,
+    State(persistence_service): State<PersistenceService>,
+    Json(request): Json<CreateOAuthClientRequest>,
+) -> Result<axum::http::StatusCode, IdentityError> {
+    let Some(identity): Option<Identity> = session.get(IDENTITY).await? else {
+        return Ok(axum::http::StatusCode::UNAUTHORIZED);
+    };
+    if !identity.admin {
+        return Ok(axum::http::StatusCode::UNAUTHORIZED);
+    }
+    validate_client_registration_request(&request)?;
+    persistence_service
+        .create_oauth_client(
+            &request.client_id,
+            &request.name,
+            request.redirect_uris,
+            request.scopes,
+            request.pkce_required,
+        )
+        .await?;
+    Ok(axum::http::StatusCode::CREATED)
 }
 
 async fn authorize(
@@ -472,6 +506,42 @@ fn validate_token_request(
     Ok(())
 }
 
+fn validate_client_registration_request(
+    request: &CreateOAuthClientRequest,
+) -> Result<(), IdentityError> {
+    if request.client_id.is_empty() {
+        return Err(IdentityError::BadRequest(
+            "client_id must not be empty".to_string(),
+        ));
+    }
+    if request.name.is_empty() {
+        return Err(IdentityError::BadRequest(
+            "name must not be empty".to_string(),
+        ));
+    }
+    if request.redirect_uris.is_empty() {
+        return Err(IdentityError::BadRequest(
+            "At least one redirect_uri is required".to_string(),
+        ));
+    }
+    for redirect_uri in &request.redirect_uris {
+        Url::parse(redirect_uri).map_err(|e| {
+            IdentityError::BadRequest(format!("Invalid redirect URI '{redirect_uri}': {e}"))
+        })?;
+    }
+    if request.scopes.is_empty() {
+        return Err(IdentityError::BadRequest(
+            "At least one scope is required".to_string(),
+        ));
+    }
+    if !request.scopes.iter().any(|scope| scope == "openid") {
+        return Err(IdentityError::BadRequest(
+            "Configured scopes must include 'openid'".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn verify_pkce(code_verifier: &str, expected_challenge: &str) -> bool {
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
     challenge == expected_challenge
@@ -528,16 +598,65 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, IdentityError> {
 mod tests {
     use super::{
         bearer_token, build_redirect, consent_satisfies_request, validate_authorization_request,
-        validate_token_request, verify_pkce, AuthorizationRequest, TokenRequest,
+        validate_token_request, verify_pkce, AuthorizationRequest, CreateOAuthClientRequest,
+        TokenRequest,
     };
+    use crate::auth::IDENTITY;
+    use crate::config::EmailConfig;
     use crate::error::IdentityError;
-    use crate::persistence::{AuthorizationCode, ConsentGrant, OAuthClient};
-    use axum::http::{header, HeaderMap, HeaderValue};
+    use crate::invite::InviteService;
+    use crate::oidc::OidcService;
+    use crate::persistence::{
+        mem_db, AuthorizationCode, ConsentGrant, Credential, Identity, IdentityState, OAuthClient,
+        PersistenceService,
+    };
+    use crate::register::RegistrationService;
+    use crate::web::Templates;
+    use crate::AppState;
+    use axum::body::{to_bytes, Body};
+    use axum::extract::{Query, State};
+    use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
+    use axum::routing::get;
+    use axum::Router;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use chrono::{Duration, Utc};
+    use serde::Deserialize;
+    use serde_json::Value;
     use sha2::{Digest, Sha256};
+    use std::sync::Arc;
     use surrealdb::RecordId;
+    use tower::ServiceExt;
+    use tower_sessions::Session;
+    use url::Url;
+
+    #[derive(Deserialize)]
+    struct TestLoginRequest {
+        user_id: String,
+    }
+
+    #[derive(Deserialize)]
+    struct TokenJson {
+        access_token: String,
+        id_token: Option<String>,
+    }
+
+    fn admin_identity() -> Identity {
+        Identity {
+            email: "root@example.com".to_string(),
+            created: Utc::now(),
+            admin: true,
+            id: None,
+            state: IdentityState::Active {
+                credentials: vec![Credential {
+                    id: b"credential".to_vec(),
+                    public_key: b"public-key".to_vec(),
+                    public_key_algorithm: -7,
+                    sign_count: 0,
+                }],
+            },
+        }
+    }
 
     fn client() -> OAuthClient {
         OAuthClient {
@@ -701,5 +820,261 @@ mod tests {
             HeaderValue::from_static("Bearer token-123"),
         );
         assert_eq!(bearer_token(&headers).unwrap(), "token-123");
+    }
+
+    async fn test_login(
+        Query(query): Query<TestLoginRequest>,
+        session: Session,
+        State(persistence_service): State<PersistenceService>,
+    ) -> Result<StatusCode, IdentityError> {
+        let identity = persistence_service
+            .fetch_identity(&query.user_id)
+            .await?
+            .ok_or_else(|| IdentityError::BadRequest("Unknown test identity".to_string()))?;
+        session.insert(IDENTITY, &identity).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    fn test_app(state: AppState, db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Router {
+        Router::new()
+            .route("/test-login", get(test_login))
+            .merge(crate::oauth::oauth_routes())
+            .layer(crate::make_session_layer(db))
+            .with_state(state)
+    }
+
+    async fn response_body(response: axum::response::Response) -> Vec<u8> {
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec()
+    }
+
+    fn session_cookie(response: &axum::response::Response) -> String {
+        response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn oidc_smoke_test() -> anyhow::Result<()> {
+        let db = mem_db().await?;
+        let persistence = Arc::new(PersistenceService::new(db.clone()));
+        let user_id = persistence
+            .persist_identity(Identity {
+                email: "alice@example.com".to_string(),
+                ..admin_identity()
+            })
+            .await?;
+        let mut alice = persistence.fetch_identity(&user_id).await?.unwrap();
+        alice.admin = false;
+        persistence.update_identity(&alice).await?;
+        persistence
+            .create_oauth_client(
+                "client-1",
+                "Example client",
+                vec!["http://localhost:4000/callback".to_string()],
+                vec!["openid".to_string(), "email".to_string()],
+                true,
+            )
+            .await?;
+
+        let state = AppState {
+            ps: persistence.clone(),
+            is: Arc::new(InviteService::new(
+                persistence,
+                &EmailConfig {
+                    relay_host: "localhost".to_string(),
+                    username: None,
+                    password_file: None,
+                    sender_email: "test@example.com".to_string(),
+                },
+                "http://localhost:8080",
+            )?),
+            templates: Arc::new(Templates::new()?),
+            oidc: Arc::new(OidcService::new("http://localhost:8080")?),
+            rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+        };
+        let app = test_app(state, db);
+
+        let discovery = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/.well-known/openid-configuration")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(discovery.status(), StatusCode::OK);
+        let discovery_json: Value = serde_json::from_slice(&response_body(discovery).await)?;
+        assert_eq!(
+            discovery_json["issuer"],
+            Value::String("http://localhost:8080".to_string())
+        );
+
+        let jwks = app
+            .clone()
+            .oneshot(Request::builder().uri("/jwks.json").body(Body::empty())?)
+            .await?;
+        assert_eq!(jwks.status(), StatusCode::OK);
+        let jwks_json: Value = serde_json::from_slice(&response_body(jwks).await)?;
+        assert_eq!(jwks_json["keys"].as_array().unwrap().len(), 1);
+
+        let login = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/test-login?user_id={user_id}"))
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(login.status(), StatusCode::NO_CONTENT);
+        let cookie = session_cookie(&login);
+
+        let verifier = "verifier-123";
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let authorize = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&scope=openid%20email&state=state-123&nonce=nonce-123&code_challenge={challenge}&code_challenge_method=S256"
+                    ))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(authorize.status(), StatusCode::OK);
+        let authorize_body = String::from_utf8(response_body(authorize).await)?;
+        assert!(authorize_body.contains("Authorize Example client"));
+
+        let consent = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/authorize/consent")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("decision=approve"))?,
+            )
+            .await?;
+        assert_eq!(consent.status(), StatusCode::SEE_OTHER);
+        let location = consent
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()?
+            .to_string();
+        let redirect = Url::parse(&location)?;
+        let query: std::collections::HashMap<String, String> =
+            redirect.query_pairs().into_owned().collect();
+        let code = query.get("code").unwrap().to_string();
+        assert_eq!(query.get("state").unwrap(), "state-123");
+
+        let token = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "grant_type=authorization_code&code={code}&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&client_id=client-1&code_verifier={verifier}"
+                    )))?,
+            )
+            .await?;
+        assert_eq!(token.status(), StatusCode::OK);
+        let token_json: TokenJson = serde_json::from_slice(&response_body(token).await)?;
+        assert!(!token_json.access_token.is_empty());
+        assert_eq!(token_json.id_token.as_ref().unwrap().split('.').count(), 3);
+
+        let userinfo = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/userinfo")
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", token_json.access_token),
+                    )
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(userinfo.status(), StatusCode::OK);
+        let userinfo_json: Value = serde_json::from_slice(&response_body(userinfo).await)?;
+        assert_eq!(userinfo_json["sub"], Value::String(user_id));
+        assert_eq!(
+            userinfo_json["email"],
+            Value::String("alice@example.com".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn admin_can_create_oauth_client() -> anyhow::Result<()> {
+        let db = mem_db().await?;
+        let persistence = Arc::new(PersistenceService::new(db.clone()));
+        let admin_id = persistence.persist_identity(admin_identity()).await?;
+
+        let state = AppState {
+            ps: persistence.clone(),
+            is: Arc::new(InviteService::new(
+                persistence.clone(),
+                &EmailConfig {
+                    relay_host: "localhost".to_string(),
+                    username: None,
+                    password_file: None,
+                    sender_email: "test@example.com".to_string(),
+                },
+                "http://localhost:8080",
+            )?),
+            templates: Arc::new(Templates::new()?),
+            oidc: Arc::new(OidcService::new("http://localhost:8080")?),
+            rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+        };
+        let app = test_app(state, db);
+
+        let login = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/test-login?user_id={admin_id}"))
+                    .body(Body::empty())?,
+            )
+            .await?;
+        let cookie = session_cookie(&login);
+
+        let create = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/oauth-client")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&CreateOAuthClientRequest {
+                        client_id: "configured-client".to_string(),
+                        name: "Configured Client".to_string(),
+                        redirect_uris: vec!["http://localhost:4000/callback".to_string()],
+                        scopes: vec!["openid".to_string(), "email".to_string()],
+                        pkce_required: true,
+                    })?))?,
+            )
+            .await?;
+        assert_eq!(create.status(), StatusCode::CREATED);
+
+        let created = persistence.fetch_oauth_client("configured-client").await?;
+        assert!(created.is_some());
+        assert_eq!(created.unwrap().name, "Configured Client");
+        Ok(())
     }
 }
