@@ -1,7 +1,9 @@
 use crate::auth::IDENTITY;
 use crate::error::IdentityError;
 use crate::oidc::{JwksResponse, OidcService, OpenidConfiguration};
-use crate::persistence::{AuthorizationCode, Identity, OAuthClient, PersistenceService};
+use crate::persistence::{
+    AuthorizationCode, CreateAuthorizationCode, Identity, OAuthClient, PersistenceService,
+};
 use crate::util::Token;
 use crate::web::Templates;
 use crate::AppState;
@@ -123,6 +125,7 @@ async fn authorize(
     Query(request): Query<AuthorizationRequest>,
     session: Session,
     State(persistence_service): State<PersistenceService>,
+    State(oidc_service): State<OidcService>,
     State(templates): State<Templates>,
 ) -> Result<Response, IdentityError> {
     let Some(client) = persistence_service
@@ -135,12 +138,21 @@ async fn authorize(
     };
     let pending = validate_authorization_request(request, &client)?;
     session.insert(PENDING_AUTHORIZATION, &pending).await?;
-    continue_authorization(session, persistence_service, templates, &client, pending).await
+    continue_authorization(
+        session,
+        persistence_service,
+        oidc_service,
+        templates,
+        &client,
+        pending,
+    )
+    .await
 }
 
 async fn resume_authorize(
     session: Session,
     State(persistence_service): State<PersistenceService>,
+    State(oidc_service): State<OidcService>,
     State(templates): State<Templates>,
 ) -> Result<Response, IdentityError> {
     let Some(pending): Option<PendingAuthorizationRequest> =
@@ -160,7 +172,15 @@ async fn resume_authorize(
         ));
     };
 
-    continue_authorization(session, persistence_service, templates, &client, pending).await
+    continue_authorization(
+        session,
+        persistence_service,
+        oidc_service,
+        templates,
+        &client,
+        pending,
+    )
+    .await
 }
 
 async fn authorize_consent(
@@ -210,17 +230,17 @@ async fn authorize_consent(
 
     let code = Token::random().base64();
     persistence_service
-        .create_authorization_code(
-            &code,
-            &pending.client_id,
-            &identity.id()?,
-            &pending.redirect_uri,
-            pending.scopes.clone(),
-            pending.nonce.clone(),
-            &pending.code_challenge,
-            &pending.code_challenge_method,
-            chrono::Utc::now() + chrono::Duration::minutes(10),
-        )
+        .create_authorization_code(CreateAuthorizationCode {
+            code_hash: code.clone(),
+            client_id: pending.client_id.clone(),
+            subject_id: identity.id()?,
+            redirect_uri: pending.redirect_uri.clone(),
+            scopes: pending.scopes.clone(),
+            nonce: pending.nonce.clone(),
+            code_challenge: pending.code_challenge.clone(),
+            code_challenge_method: pending.code_challenge_method.clone(),
+            expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+        })
         .await?;
     session
         .remove::<PendingAuthorizationRequest>(PENDING_AUTHORIZATION)
@@ -348,6 +368,7 @@ async fn jwks(State(oidc_service): State<OidcService>) -> axum::Json<JwksRespons
 async fn continue_authorization(
     session: Session,
     persistence_service: PersistenceService,
+    oidc_service: OidcService,
     templates: Templates,
     client: &OAuthClient,
     pending: PendingAuthorizationRequest,
@@ -362,17 +383,17 @@ async fn continue_authorization(
     if consent_satisfies_request(existing_consent.as_ref(), &pending.scopes) {
         let code = Token::random().base64();
         persistence_service
-            .create_authorization_code(
-                &code,
-                &pending.client_id,
-                &identity.id()?,
-                &pending.redirect_uri,
-                pending.scopes.clone(),
-                pending.nonce.clone(),
-                &pending.code_challenge,
-                &pending.code_challenge_method,
-                chrono::Utc::now() + chrono::Duration::minutes(10),
-            )
+            .create_authorization_code(CreateAuthorizationCode {
+                code_hash: code.clone(),
+                client_id: pending.client_id.clone(),
+                subject_id: identity.id()?,
+                redirect_uri: pending.redirect_uri.clone(),
+                scopes: pending.scopes.clone(),
+                nonce: pending.nonce.clone(),
+                code_challenge: pending.code_challenge.clone(),
+                code_challenge_method: pending.code_challenge_method.clone(),
+                expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+            })
             .await?;
         session
             .remove::<PendingAuthorizationRequest>(PENDING_AUTHORIZATION)
@@ -388,11 +409,10 @@ async fn continue_authorization(
         "authorize",
         &json!({
             "client_name": client.name,
-            "client_id": client.client_id,
+            "idp_basename": oidc_service.issuer_basename(),
             "identity_email": identity.email,
-            "redirect_uri": pending.redirect_uri,
             "scopes": pending.scopes,
-            "state": pending.state,
+            "requests_email": pending.scopes.iter().any(|scope| scope == "email"),
         }),
     )?;
     Ok(Html(body).into_response())
@@ -943,7 +963,8 @@ mod tests {
             .await?;
         assert_eq!(authorize.status(), StatusCode::OK);
         let authorize_body = String::from_utf8(response_body(authorize).await)?;
-        assert!(authorize_body.contains("Authorize Example client"));
+        assert!(authorize_body
+            .contains("The website Example client is attempting to use this service for logins."));
 
         let consent = app
             .clone()

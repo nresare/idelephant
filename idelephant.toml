@@ -1,4 +1,4 @@
-root_key = "zq.luDCkyil5qf1qCJwm5lnSe97x5mROvXUMfwpOASJ0MgalZTIj"
+root_key = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBKSG3p1Wt0MFSiS5adWeXDlJuUONA7OKDXwlwNKMuvmYNfe/p/Cai44ErLpOo4mHLCLu+MVtn9bvekC/LnBgays="
 
 db_path = "/tmp/db"
 
@@ -9,6 +9,6 @@ sender_email = "noa@resare.com"
 relay_host = "mail.resare.com"
 
 [persistence]
-uri = "ws://localhost:8000"
+uri = "ws://localhost:8000/"
 username = "idelephant"
 password_file = "/tmp/password"

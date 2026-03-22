@@ -1,27 +1,23 @@
 <html lang="en">
     <head>
-        <title>Authorize application</title>
+        <title>Consent to Login</title>
         <link rel="stylesheet" href="/static/index.css"/>
     </head>
     <body>
         <main class="main">
             <section>
-                <h1>Authorize {{client_name}}</h1>
-                <p>Signed in as {{identity_email}}</p>
-                <p>Client ID: {{client_id}}</p>
-                <p>Redirect URI: {{redirect_uri}}</p>
-                <p>This application is requesting access to the following scopes:</p>
-                <ul>
-                    {{#each scopes}}
-                    <li>{{this}}</li>
-                    {{/each}}
-                </ul>
-                {{#if state}}
-                <p>State: {{state}}</p>
+                <h1>Consent to Login</h1>
+                <p>The website {{client_name}} is attempting to use this service for logins.</p>
+                {{#if requests_email}}
+                <p>As part of the login process, it is requesting your email address.</p>
+                <p>Do you consent to sharing your email address, as stored on {{idp_basename}}, with the site {{client_name}}?</p>
+                {{else}}
+                <p>Do you consent to continuing the login process using your account on {{idp_basename}}?</p>
                 {{/if}}
+                <p>You are currently signed in as {{identity_email}}.</p>
                 <form action="/authorize/consent" method="post">
-                    <p><button type="submit" name="decision" value="approve">Approve</button></p>
-                    <p><button type="submit" name="decision" value="deny">Deny</button></p>
+                    <p><button type="submit" name="decision" value="approve">Yes, continue</button></p>
+                    <p><button type="submit" name="decision" value="deny">No, cancel</button></p>
                 </form>
             </section>
         </main>
