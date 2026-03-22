@@ -1,10 +1,12 @@
 use crate::auth::IDENTITY;
 use crate::error::IdentityError;
+use crate::oidc::{JwksResponse, OidcService, OpenidConfiguration};
 use crate::persistence::{AuthorizationCode, Identity, OAuthClient, PersistenceService};
 use crate::util::Token;
 use crate::web::Templates;
 use crate::AppState;
 use axum::extract::{Form, Query, State};
+use axum::http::{header, HeaderMap};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -22,6 +24,12 @@ pub fn oauth_routes() -> Router<AppState> {
         .route("/authorize/resume", get(resume_authorize))
         .route("/authorize/consent", post(authorize_consent))
         .route("/token", post(token))
+        .route("/userinfo", get(userinfo))
+        .route(
+            "/.well-known/openid-configuration",
+            get(openid_configuration),
+        )
+        .route("/jwks.json", get(jwks))
 }
 
 pub const PENDING_AUTHORIZATION: &str = "idelephant.oauth.pending-authorization";
@@ -69,6 +77,14 @@ struct TokenResponse {
     token_type: String,
     expires_in: i64,
     scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id_token: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UserinfoResponse {
+    sub: String,
+    email: String,
 }
 
 async fn authorize(
@@ -186,6 +202,7 @@ async fn authorize_consent(
 
 async fn token(
     State(persistence_service): State<PersistenceService>,
+    State(oidc_service): State<OidcService>,
     Form(request): Form<TokenRequest>,
 ) -> Result<axum::Json<TokenResponse>, IdentityError> {
     if request.grant_type != "authorization_code" {
@@ -234,12 +251,66 @@ async fn token(
         .mark_authorization_code_used(&request.code, chrono::Utc::now())
         .await?;
 
+    let id_token = if code.scopes.iter().any(|scope| scope == "openid") {
+        let identity = persistence_service
+            .fetch_identity(&code.subject_id)
+            .await?
+            .ok_or_else(|| {
+                IdentityError::BadRequest(
+                    "authorization code references unknown identity".to_string(),
+                )
+            })?;
+        Some(oidc_service.mint_id_token(
+            &code.subject_id,
+            &code.client_id,
+            code.nonce.as_deref(),
+            &identity.email,
+        )?)
+    } else {
+        None
+    };
+
     Ok(axum::Json(TokenResponse {
         access_token,
         token_type: "Bearer".to_string(),
         expires_in: expires_in.num_seconds(),
         scope: code.scopes.join(" "),
+        id_token,
     }))
+}
+
+async fn userinfo(
+    headers: HeaderMap,
+    State(persistence_service): State<PersistenceService>,
+) -> Result<axum::Json<UserinfoResponse>, IdentityError> {
+    let token = bearer_token(&headers)?;
+    let access_token = persistence_service
+        .fetch_access_token(token)
+        .await?
+        .ok_or_else(|| IdentityError::BadRequest("Unknown access token".to_string()))?;
+    if access_token.expires_at < chrono::Utc::now() {
+        return Err(IdentityError::BadRequest(
+            "access token has expired".to_string(),
+        ));
+    }
+    let identity = persistence_service
+        .fetch_identity(&access_token.subject_id)
+        .await?
+        .ok_or_else(|| IdentityError::BadRequest("Unknown identity".to_string()))?;
+    Ok(axum::Json(UserinfoResponse {
+        sub: access_token.subject_id,
+        email: identity.email,
+    }))
+}
+
+async fn openid_configuration(
+    State(oidc_service): State<OidcService>,
+) -> axum::Json<OpenidConfiguration> {
+    axum::Json(oidc_service.configuration())
+}
+
+async fn jwks(State(oidc_service): State<OidcService>) -> axum::Json<JwksResponse> {
+    axum::Json(oidc_service.jwks())
 }
 
 async fn continue_authorization(
@@ -435,16 +506,35 @@ fn build_redirect(
     Ok(redirect.to_string())
 }
 
+fn bearer_token(headers: &HeaderMap) -> Result<&str, IdentityError> {
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .ok_or_else(|| IdentityError::BadRequest("Missing Authorization header".to_string()))?;
+    let authorization = authorization
+        .to_str()
+        .map_err(|_| IdentityError::BadRequest("Invalid Authorization header".to_string()))?;
+    let token = authorization
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| IdentityError::BadRequest("Expected Bearer token".to_string()))?;
+    if token.is_empty() {
+        return Err(IdentityError::BadRequest(
+            "Bearer token must not be empty".to_string(),
+        ));
+    }
+    Ok(token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        build_redirect, consent_satisfies_request, validate_authorization_request,
+        bearer_token, build_redirect, consent_satisfies_request, validate_authorization_request,
         validate_token_request, verify_pkce, AuthorizationRequest, TokenRequest,
     };
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine;
     use crate::error::IdentityError;
     use crate::persistence::{AuthorizationCode, ConsentGrant, OAuthClient};
+    use axum::http::{header, HeaderMap, HeaderValue};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
     use chrono::{Duration, Utc};
     use sha2::{Digest, Sha256};
     use surrealdb::RecordId;
@@ -601,5 +691,15 @@ mod tests {
 
         let err = validate_token_request(&request, &code).unwrap_err();
         assert!(matches!(err, IdentityError::BadRequest(_)));
+    }
+
+    #[test]
+    fn bearer_token_extracts_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer token-123"),
+        );
+        assert_eq!(bearer_token(&headers).unwrap(), "token-123");
     }
 }

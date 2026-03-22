@@ -39,6 +39,8 @@ clap = { workspace = true }
 lettre = { version = "0.11.19", features = ["native-tls", "webpki-roots", "tokio1", "tokio1-native-tls", "builder"] }
 handlebars = "6.4.0"
 url = "2.5.8"
+jsonwebtoken = "9.3.1"
+p256 = { version = "0.13.2", features = ["pkcs8", "pem"] }
 zqlu = "0.2.2"
 
 [workspace.dependencies]
