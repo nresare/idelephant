@@ -5,20 +5,24 @@ use base64::Engine;
 use idelephant_webauthn::{
     AuthenticatorAssertionResponse, AuthenticatorData, ClientData, PublicKeyCredentialAuthenticate,
 };
+use log::debug;
 use reqwest::blocking::Client;
 use serde_json::Value;
 
-use crate::BASE;
 pub fn authenticate(
     client: &Client,
     credential: &mut dyn Credential,
     user_id: Vec<u8>,
+    base: &str,
 ) -> anyhow::Result<()> {
-    let challenge = get_auth_challenge(&client.get(format!("{BASE}/auth-start")).send()?.json()?)?;
-
+    let challenge = get_auth_challenge(&client.get(format!("{base}/auth-start")).send()?.json()?)?;
     let auth_finish_request = make_auth_finish_request(challenge, user_id, credential).json();
+    debug!(
+        "auth-finish request JSON: {}",
+        serde_json::to_string_pretty(&auth_finish_request)?
+    );
     let response = client
-        .post(format!("{BASE}/auth-finish"))
+        .post(format!("{base}/auth-finish"))
         .json(&auth_finish_request)
         .send()?;
     if !response.status().is_success() {

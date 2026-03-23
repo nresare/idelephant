@@ -1,5 +1,4 @@
 use crate::credential::Credential;
-use crate::BASE;
 use anyhow::{anyhow, Context};
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
@@ -14,10 +13,11 @@ pub fn register_public_key(
     client: &Client,
     identity: &mut dyn Credential,
     email: &str,
+    base: &str,
 ) -> anyhow::Result<Vec<u8>> {
     let (challenge, user_id) = get_register_challenge(
         &client
-            .post(format!("{BASE}/register-start"))
+            .post(format!("{base}/register-start"))
             .header("Content-Type", "application/json")
             .json(&json!({"email": email}))
             .send()?
@@ -25,9 +25,9 @@ pub fn register_public_key(
     )?;
 
     let response = client
-        .post(format!("{BASE}/register-finish"))
+        .post(format!("{base}/register-finish"))
         .header("Content-Type", "application/json")
-        .json(&make_register_finish_request(&challenge, BASE, identity).json())
+        .json(&make_register_finish_request(&challenge, base, identity).json())
         .send()?;
 
     if !response.status().is_success() {

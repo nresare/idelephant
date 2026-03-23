@@ -11,6 +11,8 @@ pub enum IdentityError {
     Anyhow(#[from] anyhow::Error),
     #[error("{0}")]
     BadRequest(String),
+    #[error("{0}")]
+    Unauthorized(String),
     #[error("Failure related to interacting with the session: {0}")]
     Session(#[from] tower_sessions::session::Error),
     // this would be things like when the db driver returns None but succeeds to create()
@@ -32,6 +34,9 @@ impl IntoResponse for IdentityError {
         match self {
             IdentityError::BadRequest(message) => {
                 (StatusCode::BAD_REQUEST, message).into_response()
+            }
+            IdentityError::Unauthorized(message) => {
+                (StatusCode::UNAUTHORIZED, message).into_response()
             }
             other => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", other)).into_response(),
         }

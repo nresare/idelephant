@@ -21,7 +21,12 @@ pub fn convert_key(key: &PublicKey) -> Result<SubjectPublicKeyInfo<ObjectIdentif
                 subject_public_key,
             }
         }
-        _ => return Err(anyhow!("Unsupported key type")),
+        _ => {
+            return Err(anyhow!(
+                "Unsupported key type: {}. Currently, only NIST P256 (ecdsa-sha2-nistp256) keys are supported.",
+                key.algorithm()
+            ));
+        }
     })
 }
 

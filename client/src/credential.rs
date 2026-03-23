@@ -1,5 +1,6 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use idelephant_common::{convert_key, ToBoxedSlice};
+use log::debug;
 use p256::ecdsa::signature::{SignatureEncoding, Signer};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use p256::elliptic_curve::{NonZeroScalar, PrimeField};
@@ -64,13 +65,16 @@ pub struct SshAgentBackedCredential {
 impl SshAgentBackedCredential {
     pub fn new() -> Result<Self> {
         let path = env::var("SSH_AUTH_SOCK").expect("SSH_AUTH_SOCK is not set");
+        debug!("using the ssh-agent at '{}' for authentication", path);
         let mut client = Client::connect(Path::new(path.as_str()))?;
         let mut keys = client.list_identities()?.into_iter();
         let key = keys.next().ok_or_else(|| {
             anyhow!("For now we only handle the case when the ssh-agent provides one key")
         })?;
         let fingerprint = key.fingerprint(Default::default());
-        let public_key_bytes = convert_key(&key)?.to_boxed_slice();
+        let public_key_bytes = convert_key(&key)
+            .with_context(|| format!("Failed to convert SSH key '{}' from SSH agent", fingerprint))?
+            .to_boxed_slice();
         Ok(Self {
             client,
             key,
