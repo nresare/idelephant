@@ -15,6 +15,7 @@ use serde_json::Value;
 use std::str;
 use std::str::from_utf8;
 use tower_sessions::Session;
+use tracing::warn;
 
 pub fn auth_routes() -> Router<AppState> {
     Router::new()
@@ -57,19 +58,33 @@ async fn auth_finish(
     ))?;
 
     let Some(identity) = persistence_service.fetch_identity(user_handle).await? else {
-        return Err(IdentityError::Anyhow(anyhow!(
-            "Could not find identity with id {user_handle}"
-        )));
+        warn!(
+            "Authentication failed: unknown user handle '{}'",
+            user_handle
+        );
+        return Err(IdentityError::Unauthorized(
+            "Authentication failed".to_string(),
+        ));
     };
 
-    let key = find_key(&identity, &credential.id)?;
+    let key = find_key(&identity, &credential.id, user_handle)?;
 
-    credential.verify(key, &challenge)?;
+    credential.verify(key, &challenge).map_err(|error| {
+        warn!(
+            "Authentication failed for user '{}': signature verification failed: {:#}",
+            user_handle, error
+        );
+        IdentityError::Unauthorized("Authentication failed".to_string())
+    })?;
     session.insert(IDENTITY, &identity).await?;
     Ok("OK".to_string())
 }
 
-fn find_key<'a>(identity: &'a Identity, credential_id: &[u8]) -> Result<&'a [u8], IdentityError> {
+fn find_key<'a>(
+    identity: &'a Identity,
+    credential_id: &[u8],
+    user_handle: &str,
+) -> Result<&'a [u8], IdentityError> {
     let Active { credentials } = &identity.state else {
         return Err(anyhow!("Identity is not in state active").into());
     };
@@ -78,9 +93,53 @@ fn find_key<'a>(identity: &'a Identity, credential_id: &[u8]) -> Result<&'a [u8]
             return Ok(&credential.public_key);
         }
     }
-    Err(anyhow!(
-        "Could not find key with id for user {}",
-        String::from_utf8_lossy(credential_id)
-    )
-    .into())
+    warn!(
+        "Authentication failed for user '{}': unknown credential id '{}'",
+        user_handle,
+        STANDARD_NO_PAD.encode(credential_id)
+    );
+    Err(IdentityError::Unauthorized(
+        "Authentication failed".to_string(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_key;
+    use crate::error::IdentityError;
+    use crate::persistence::{Credential, Identity, IdentityState};
+    use chrono::Utc;
+
+    fn active_identity() -> Identity {
+        Identity {
+            email: "alice@example.com".to_string(),
+            created: Utc::now(),
+            admin: false,
+            id: None,
+            state: IdentityState::Active {
+                credentials: vec![Credential {
+                    id: b"registered-credential".to_vec(),
+                    public_key: b"public-key".to_vec(),
+                    public_key_algorithm: -7,
+                    sign_count: 0,
+                }],
+            },
+        }
+    }
+
+    #[test]
+    fn find_key_returns_matching_public_key() {
+        let identity = active_identity();
+        let result = find_key(&identity, b"registered-credential", "identity:alice").unwrap();
+        assert_eq!(result, b"public-key");
+    }
+
+    #[test]
+    fn find_key_returns_unauthorized_for_unknown_credential() {
+        let identity = active_identity();
+        let err = find_key(&identity, &[0xff, 0x00, 0x41], "identity:alice").unwrap_err();
+        assert!(
+            matches!(err, IdentityError::Unauthorized(message) if message == "Authentication failed")
+        );
+    }
 }

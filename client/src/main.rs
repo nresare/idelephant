@@ -15,10 +15,14 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-pub(crate) const BASE: &str = "http://localhost:8080";
-
 #[derive(Parser)]
 struct Cli {
+    /// Base URL of the server to connect to
+    #[arg(long = "endpoint", default_value = "http://localhost:8080")]
+    endpoint: String,
+    /// Set the verbosity level to debug
+    #[arg(long = "verbose", short = 'v', default_value_t = false)]
+    verbose: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -54,29 +58,35 @@ enum Command {
 }
 
 fn main() -> anyhow::Result<()> {
+    let args = Cli::parse();
+    let filter = if args.verbose {
+        "idelephant=debug"
+    } else {
+        "idelephant=info"
+    };
+
     tracing_subscriber::registry()
-        .with(EnvFilter::new("idelephant=info"))
+        .with(EnvFilter::new(filter))
         .with(tracing_subscriber::fmt::layer().compact())
         .init();
-    info!("Connecting to {BASE}");
-    let args = Cli::parse();
+
+    info!("Connecting to {}", args.endpoint);
 
     let client = ClientBuilder::new().cookie_store(true).build()?;
-
     let mut credential = SshAgentBackedCredential::new()?;
 
-    authenticate(&client, &mut credential, b"root".to_vec())?;
+    authenticate(&client, &mut credential, b"root".to_vec(), &args.endpoint)?;
     info!("Successfully authenticated using the newly registered key");
 
     match args.command {
         Command::Invite { email, admin } => {
             info!("Inviting user with email '{}' and admin = {}", email, admin);
-            invite(&client, email, admin)?;
+            invite(&client, email, admin, &args.endpoint)?;
         }
         Command::Register { email } => {
             info!("Registering user with email '{}'", email);
             let mut key = P256Random::new();
-            register_public_key(&client, &mut key, &email)?;
+            register_public_key(&client, &mut key, &email, &args.endpoint)?;
         }
         Command::RegisterClient {
             client_id,
@@ -93,9 +103,11 @@ fn main() -> anyhow::Result<()> {
                     redirect_uris,
                     pkce_required,
                 },
+                &args.endpoint,
             )?;
         }
     }
+
     Ok(())
 }
 
@@ -113,9 +125,9 @@ struct CreateClientRequest {
     pkce_required: bool,
 }
 
-fn invite(client: &Client, email: String, admin: bool) -> Result<(), anyhow::Error> {
+fn invite(client: &Client, email: String, admin: bool, base: &str) -> Result<(), anyhow::Error> {
     let response = client
-        .post(format!("{BASE}/invite"))
+        .post(format!("{base}/invite"))
         .json(&InviteRequest { email, admin })
         .send()?;
     match response.status() {
@@ -124,9 +136,13 @@ fn invite(client: &Client, email: String, admin: bool) -> Result<(), anyhow::Err
     }
 }
 
-fn create_client(client: &Client, request: CreateClientRequest) -> Result<(), anyhow::Error> {
+fn create_client(
+    client: &Client,
+    request: CreateClientRequest,
+    base: &str,
+) -> Result<(), anyhow::Error> {
     let response = client
-        .post(format!("{BASE}/oauth-client"))
+        .post(format!("{base}/oauth-client"))
         .json(&request)
         .send()?;
     match response.status() {
