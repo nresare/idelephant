@@ -39,6 +39,7 @@ use thiserror::Error;
 use time::Duration;
 use tower_http::trace;
 use tower_http::trace::TraceLayer;
+use tower_sessions::cookie::SameSite;
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_surrealdb_store::SurrealSessionStore;
 use tracing::Level;
@@ -177,6 +178,7 @@ fn make_session_layer(db: Surreal<Any>) -> SessionManagerLayer<SurrealSessionSto
     let session_store = SurrealSessionStore::new(db, "session".to_string());
     SessionManagerLayer::new(session_store)
         .with_expiry(Expiry::OnInactivity(Duration::hours(1)))
+        .with_same_site(SameSite::Lax)
         .with_secure(false)
 }
 
