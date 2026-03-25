@@ -637,7 +637,7 @@ mod tests {
     use serde_json::Value;
     use sha2::{Digest, Sha256};
     use std::sync::Arc;
-    use surrealdb::RecordId;
+    use surrealdb::types::RecordId;
     use tower::ServiceExt;
     use tower_sessions::Session;
     use url::Url;
@@ -676,7 +676,7 @@ mod tests {
             name: "Example client".to_string(),
             redirect_uris: vec!["http://localhost:4000/callback".to_string()],
             pkce_required: true,
-            id: RecordId::from(("oauth_client", "client-1")),
+            id: RecordId::new("oauth_client", "client-1"),
         }
     }
 
@@ -759,7 +759,7 @@ mod tests {
             code_challenge_method: "S256".to_string(),
             expires_at: Utc::now() + Duration::minutes(5),
             used_at: None,
-            id: RecordId::from(("authorization_code", "code-123")),
+            id: RecordId::new("authorization_code", "code-123"),
         }
     }
 
@@ -783,7 +783,7 @@ mod tests {
             client_id: "client-1".to_string(),
             scopes: vec!["openid".to_string(), "email".to_string()],
             created_at: Utc::now(),
-            id: RecordId::from(("consent_grant", "grant-1")),
+            id: RecordId::new("consent_grant", "grant-1"),
         };
 
         assert!(consent_satisfies_request(
@@ -846,11 +846,11 @@ mod tests {
         Ok(StatusCode::NO_CONTENT)
     }
 
-    fn test_app(state: AppState, db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Router {
+    fn test_app(state: AppState, _db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Router {
         Router::new()
             .route("/test-login", get(test_login))
             .merge(crate::oauth::oauth_routes())
-            .layer(crate::make_session_layer(db))
+            .layer(crate::make_session_layer())
             .with_state(state)
     }
 

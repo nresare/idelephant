@@ -5,6 +5,7 @@ use base64::Engine;
 use rand::{random, rng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
+use surrealdb::types::{Kind, SurrealValue, Value};
 
 // According to the spec(1) this needs to be at least 16 bytes. We go with 18
 // as we will base64 encode the value and lengths not evenly divisible by 3 will
@@ -34,6 +35,21 @@ impl Token {
         Ok(Token(
             URL_SAFE_NO_PAD.decode(base64.as_ref().as_bytes())?.into(),
         ))
+    }
+}
+
+impl SurrealValue for Token {
+    fn kind_of() -> Kind {
+        String::kind_of()
+    }
+
+    fn into_value(self) -> Value {
+        self.base64().into_value()
+    }
+
+    fn from_value(value: Value) -> Result<Self, surrealdb::Error> {
+        let base64 = String::from_value(value)?;
+        Token::from_base64(&base64).map_err(|err| surrealdb::Error::internal(err.to_string()))
     }
 }
 
