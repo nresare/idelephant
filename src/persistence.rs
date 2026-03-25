@@ -3,16 +3,16 @@ use crate::error::IdentityError;
 use crate::error::IdentityError::Logic;
 use crate::util::Token;
 use crate::AppState;
-use anyhow::anyhow;
 use axum::extract::FromRef;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use surrealdb::engine::any;
 use surrealdb::engine::any::Any;
-use surrealdb::{RecordId, Surreal};
+use surrealdb::types::{RecordId, RecordIdKey, SurrealValue};
+use surrealdb::Surreal;
 
-#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct Identity {
     pub email: String,
     pub created: DateTime<Utc>,
@@ -28,16 +28,16 @@ impl Identity {
                 "Attempted to read id from Identity not read from the db".to_string(),
             ));
         };
-        Ok(id.key().into_inner_ref().to_raw())
+        record_id_key_to_string(&id.key)
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, SurrealValue)]
 struct Record {
     id: RecordId,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, SurrealValue)]
 struct NewOAuthClient {
     client_id: String,
     name: String,
@@ -45,7 +45,7 @@ struct NewOAuthClient {
     pkce_required: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, SurrealValue)]
 struct NewAuthorizationCode {
     code_hash: String,
     client_id: String,
@@ -71,7 +71,7 @@ pub struct CreateAuthorizationCode {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, SurrealValue)]
 struct NewAccessToken {
     token_hash: String,
     client_id: String,
@@ -80,7 +80,7 @@ struct NewAccessToken {
     expires_at: DateTime<Utc>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, SurrealValue)]
 struct NewConsentGrant {
     subject_id: String,
     client_id: String,
@@ -88,14 +88,14 @@ struct NewConsentGrant {
     created_at: DateTime<Utc>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub enum IdentityState {
     Allocated { challenge: Vec<u8> },
     Active { credentials: Vec<Credential> },
     Invited { token: Token },
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct Credential {
     pub id: Vec<u8>,
     pub public_key: Vec<u8>,
@@ -103,7 +103,7 @@ pub struct Credential {
     pub sign_count: u32,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct OAuthClient {
     pub client_id: String,
     pub name: String,
@@ -112,7 +112,7 @@ pub struct OAuthClient {
     pub id: RecordId,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct AuthorizationCode {
     pub code_hash: String,
     pub client_id: String,
@@ -127,7 +127,7 @@ pub struct AuthorizationCode {
     pub id: RecordId,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct AccessToken {
     pub token_hash: String,
     pub client_id: String,
@@ -137,7 +137,7 @@ pub struct AccessToken {
     pub id: RecordId,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct ConsentGrant {
     pub subject_id: String,
     pub client_id: String,
@@ -151,13 +151,29 @@ pub struct PersistenceService {
     db: Surreal<Any>,
 }
 
+fn record_id_key_to_string(key: &RecordIdKey) -> Result<String, IdentityError> {
+    match key {
+        RecordIdKey::String(value) => Ok(value.clone()),
+        RecordIdKey::Number(value) => Ok(value.to_string()),
+        RecordIdKey::Uuid(value) => Ok(value.to_string()),
+        other => Err(Logic(format!(
+            "Unsupported record id key type for string conversion: {other:?}"
+        ))),
+    }
+}
+
+fn is_duplicate_email_error(err: &surrealdb::Error) -> bool {
+    err.message()
+        .contains("Database index `identityEmail` already contains")
+}
+
 pub async fn make_db(config: &PersistenceConfig) -> Result<Surreal<Any>, IdentityError> {
     let db = any::connect(&config.uri).await?;
     db.signin(surrealdb::opt::auth::Database {
-        namespace: "default",
-        database: "idelephant",
-        username: &config.username,
-        password: &config.password()?,
+        namespace: "default".to_string(),
+        database: "idelephant".to_string(),
+        username: config.username.clone(),
+        password: config.password()?,
     })
     .await?;
     setup_db(&db).await?;
@@ -173,21 +189,15 @@ pub async fn mem_db() -> Result<Surreal<Any>, IdentityError> {
 
 async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
     db.use_ns("default").use_db("idelephant").await?;
-    db.query("DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE")
-        .query(
-            "DEFINE INDEX IF NOT EXISTS inviteToken ON identity FIELDS state.Invited.token UNIQUE",
-        )
-        .query("DEFINE INDEX IF NOT EXISTS oauthClientId ON oauth_client FIELDS client_id UNIQUE")
-        .query(
-            "DEFINE INDEX IF NOT EXISTS authorizationCodeHash ON authorization_code FIELDS code_hash UNIQUE",
-        )
-        .query(
-            "DEFINE INDEX IF NOT EXISTS accessTokenHash ON access_token FIELDS token_hash UNIQUE",
-        )
-        .query(
-            "DEFINE INDEX IF NOT EXISTS consentGrantBySubjectClient ON consent_grant FIELDS subject_id, client_id UNIQUE",
-        )
-        .await?;
+    db.query(
+        "DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE;\
+         DEFINE INDEX IF NOT EXISTS inviteToken ON identity FIELDS state.Invited.token UNIQUE;\
+         DEFINE INDEX IF NOT EXISTS oauthClientId ON oauth_client FIELDS client_id UNIQUE;\
+         DEFINE INDEX IF NOT EXISTS authorizationCodeHash ON authorization_code FIELDS code_hash UNIQUE;\
+         DEFINE INDEX IF NOT EXISTS accessTokenHash ON access_token FIELDS token_hash UNIQUE;\
+         DEFINE INDEX IF NOT EXISTS consentGrantBySubjectClient ON consent_grant FIELDS subject_id, client_id UNIQUE;",
+    )
+    .await?;
     Ok(())
 }
 
@@ -204,20 +214,19 @@ impl PersistenceService {
             .content(identity)
             .await?
             .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
-        Ok(result.id.key().to_string())
+        record_id_key_to_string(&result.id.key)
     }
 
     pub async fn persist_identity_with_id(
         &self,
         id: &str,
         identity: Identity,
-    ) -> Result<String, IdentityError> {
-        let Some(result): Option<Record> =
-            self.db.create(("identity", id)).content(identity).await?
+    ) -> Result<(), IdentityError> {
+        let Some(_): Option<Record> = self.db.create(("identity", id)).content(identity).await?
         else {
             return Err(Logic("db.create succeeded but returned None".to_string()));
         };
-        Ok(result.id.key().to_string())
+        Ok(())
     }
 
     pub async fn fetch_identity(&self, id: &str) -> Result<Option<Identity>, IdentityError> {
@@ -242,7 +251,7 @@ impl PersistenceService {
             })
             .await?
             .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
-        Ok(result.id.key().to_string())
+        record_id_key_to_string(&result.id.key)
     }
 
     pub async fn fetch_oauth_client(
@@ -278,7 +287,7 @@ impl PersistenceService {
             })
             .await?
             .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
-        Ok(result.id.key().to_string())
+        record_id_key_to_string(&result.id.key)
     }
 
     pub async fn fetch_authorization_code(
@@ -341,7 +350,7 @@ impl PersistenceService {
             })
             .await?
             .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
-        Ok(result.id.key().to_string())
+        record_id_key_to_string(&result.id.key)
     }
 
     pub async fn fetch_access_token(
@@ -378,7 +387,7 @@ impl PersistenceService {
             let updated = updated.ok_or_else(|| {
                 Logic("db.update succeeded but returned None for consent grant".to_string())
             })?;
-            return Ok(updated.id.key().to_string());
+            return record_id_key_to_string(&updated.id.key);
         }
 
         let result: Record = self
@@ -392,7 +401,7 @@ impl PersistenceService {
             })
             .await?
             .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
-        Ok(result.id.key().to_string())
+        record_id_key_to_string(&result.id.key)
     }
 
     pub async fn fetch_consent_grant(
@@ -432,13 +441,12 @@ impl PersistenceService {
             },
             id: None,
         };
-        let result: Result<Option<Record>, _> = self.db.create("identity").content(identity).await;
+        let result: Result<Option<Record>, surrealdb::Error> =
+            self.db.create("identity").content(identity).await;
         match result {
             Ok(_) => Ok(token),
-            Err(surrealdb::Error::Db(surrealdb::error::Db::IndexExists { .. })) => {
-                Err(IdentityError::EmailAlreadyInUse)
-            }
-            Err(e) => Err(e.into()),
+            Err(err) if is_duplicate_email_error(&err) => Err(IdentityError::EmailAlreadyInUse),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -446,12 +454,15 @@ impl PersistenceService {
         &self,
         token: &Token,
     ) -> Result<Option<Identity>, anyhow::Error> {
-        let mut result = self
-            .db
-            .query("SELECT * FROM identity where state.Invited.token = $t")
-            .bind(("t", token.clone()))
-            .await?;
-        result.take(0).map_err(|e| anyhow!(e))
+        let identities: Vec<Identity> = self.db.select("identity").await?;
+        Ok(identities.into_iter().find(|identity| {
+            matches!(
+                &identity.state,
+                IdentityState::Invited {
+                    token: invited_token
+                } if invited_token == token
+            )
+        }))
     }
 
     pub async fn configure_root_key(
