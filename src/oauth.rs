@@ -846,11 +846,11 @@ mod tests {
         Ok(StatusCode::NO_CONTENT)
     }
 
-    fn test_app(state: AppState, _db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Router {
+    fn test_app(state: AppState, db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Router {
         Router::new()
             .route("/test-login", get(test_login))
             .merge(crate::oauth::oauth_routes())
-            .layer(crate::make_session_layer())
+            .layer(crate::make_session_layer(db))
             .with_state(state)
     }
 
