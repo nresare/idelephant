@@ -39,7 +39,8 @@ use time::Duration;
 use tower_http::trace;
 use tower_http::trace::TraceLayer;
 use tower_sessions::cookie::SameSite;
-use tower_sessions::{Expiry, MemoryStore, Session, SessionManagerLayer};
+use tower_sessions::{Expiry, Session, SessionManagerLayer};
+use tower_sessions_surrealdb_store::SurrealSessionStore;
 use tracing::Level;
 use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
@@ -122,7 +123,7 @@ async fn run() -> Result<(), Fatal> {
         .merge(invite_routes())
         .merge(oauth_routes())
         .fallback_service(get(not_found))
-        .layer(make_session_layer())
+        .layer(make_session_layer(db))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
@@ -171,8 +172,8 @@ async fn build_app_state(config: &Config, db: &Surreal<Any>) -> Result<AppState,
     Ok(state)
 }
 
-fn make_session_layer() -> SessionManagerLayer<MemoryStore> {
-    let session_store = MemoryStore::default();
+fn make_session_layer(db: Surreal<Any>) -> SessionManagerLayer<SurrealSessionStore<Any>> {
+    let session_store = SurrealSessionStore::new(db, "sessions".to_string());
     SessionManagerLayer::new(session_store)
         .with_expiry(Expiry::OnInactivity(Duration::hours(1)))
         .with_same_site(SameSite::Lax)

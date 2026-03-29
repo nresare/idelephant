@@ -190,12 +190,14 @@ pub async fn mem_db() -> Result<Surreal<Any>, IdentityError> {
 async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
     db.use_ns("default").use_db("idelephant").await?;
     db.query(
-        "DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE;\
-         DEFINE INDEX IF NOT EXISTS inviteToken ON identity FIELDS state.Invited.token UNIQUE;\
-         DEFINE INDEX IF NOT EXISTS oauthClientId ON oauth_client FIELDS client_id UNIQUE;\
-         DEFINE INDEX IF NOT EXISTS authorizationCodeHash ON authorization_code FIELDS code_hash UNIQUE;\
-         DEFINE INDEX IF NOT EXISTS accessTokenHash ON access_token FIELDS token_hash UNIQUE;\
-         DEFINE INDEX IF NOT EXISTS consentGrantBySubjectClient ON consent_grant FIELDS subject_id, client_id UNIQUE;",
+        "DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE;
+         DEFINE INDEX IF NOT EXISTS inviteToken ON identity FIELDS state.Invited.token UNIQUE;
+         DEFINE INDEX IF NOT EXISTS oauthClientId ON oauth_client FIELDS client_id UNIQUE;
+         DEFINE INDEX IF NOT EXISTS authorizationCodeHash ON authorization_code FIELDS code_hash UNIQUE;
+         DEFINE INDEX IF NOT EXISTS accessTokenHash ON access_token FIELDS token_hash UNIQUE;
+         DEFINE INDEX IF NOT EXISTS consentGrantBySubjectClient ON consent_grant FIELDS subject_id, client_id UNIQUE;
+         DEFINE TABLE IF NOT EXISTS sessions;"
+
     )
     .await?;
     Ok(())
