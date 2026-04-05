@@ -13,6 +13,17 @@ but I have a plan and I think that the other pieces will come.
 * I use an embedded [SurrealDB](https://surrealdb.com) for persistent storage, for now. I believe it should be 
   pretty straight forward to move the system to use a hosted or standalone SurrealDB instance instead.
 
+## Local development 
+
+1. Install a local surrealdb. I installed mine with `brew install surrealdb/tap/surreal`
+2. in a shell, start with `surreal start --user noa --pass secret surrealkv://tmp/devdb`
+3. Create a database user by issuing the following commands:
+   1. `surreal sql --user noa --pass secret`
+   2. `use ns default db idelephant`
+   3. `DEFINE USER idelephant ON DATABASE PASSWORD 'idelephant' ROLES OWNER`
+   4. ctrl-d
+4. Run `cargo run -- -c idelephant.toml`
+
 ## License
 
 Licensed under either of the [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0) or the
@@ -21,5 +32,5 @@ Licensed under either of the [Apache License, Version 2.0](http://www.apache.org
 ### Contribution licensing
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual-licensed as above, without any
 additional terms or conditions.
