@@ -63,7 +63,8 @@ async fn auth_finish(
             user_handle
         );
         return Err(IdentityError::Unauthorized(
-            "Authentication failed".to_string(),
+            "This passkey is no longer linked to an account on this idElephant instance."
+                .to_string(),
         ));
     };
 

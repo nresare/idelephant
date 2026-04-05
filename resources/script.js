@@ -1,4 +1,34 @@
 
+function hideError() {
+    const errorBox = document.getElementById("error-box");
+    const errorMessage = document.getElementById("error-message");
+    if (!errorBox) {
+        return;
+    }
+    errorBox.hidden = true;
+    if (errorMessage) {
+        errorMessage.textContent = "";
+    }
+}
+
+function showError(message) {
+    const errorBox = document.getElementById("error-box");
+    const errorMessage = document.getElementById("error-message");
+    if (!errorBox || !errorMessage) {
+        return;
+    }
+    errorMessage.textContent = message;
+    errorBox.hidden = false;
+}
+
+async function readErrorMessage(response, fallbackMessage) {
+    const body = (await response.text()).trim();
+    if (body.length > 0) {
+        return body;
+    }
+    return fallbackMessage;
+}
+
 async function register() {
     const data = await get_challenge();
     const registrationResult = await navigator.credentials.create(
@@ -15,23 +45,29 @@ async function register() {
 }
 
 async function authenticate() {
-    const auth_result = await navigator.credentials.get({publicKey: {challenge: await get_auth_challenge()}})
-        .then((credential) => {
-            const options = {
-                method: "POST",
-                headers: {"Content-Type": "application/json"},
-                body: auth_response_as_json(credential),
+    hideError();
+    try {
+        const auth_result = await navigator.credentials.get({publicKey: {challenge: await get_auth_challenge()}})
+            .then((credential) => {
+                const options = {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: auth_response_as_json(credential),
+                }
+                return fetch("/auth-finish", options)
+            })
+        if (auth_result.ok) {
+            if (window.idElephantPendingAuthorization) {
+                location.href = "/authorize/resume"
+            } else {
+                location.reload()
             }
-            return fetch("/auth-finish", options)
-        })
-    if (auth_result.ok) {
-        if (window.idElephantPendingAuthorization) {
-            location.href = "/authorize/resume"
         } else {
-            location.reload()
+            showError(await readErrorMessage(auth_result, "Authentication failed."));
         }
-    } else {
-        alert("something went wrong: " + auth_result.status);
+    } catch (error) {
+        console.error(error);
+        showError("Authentication could not be completed. Please try again.");
     }
 }
 

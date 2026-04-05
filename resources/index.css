@@ -34,6 +34,32 @@ input {
 
 }
 
+.error-box {
+    position: relative;
+    margin-bottom: 1rem;
+    padding: 0.875rem 2.75rem 0.875rem 1rem;
+    border: 1px solid #b42318;
+    border-radius: 0.75rem;
+    background: #fef3f2;
+    color: #7a271a;
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+.error-close {
+    position: absolute;
+    top: 0.55rem;
+    right: 0.7rem;
+    border: 0;
+    background: transparent;
+    color: #7a271a;
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0.1rem;
+    margin: 0;
+}
+
 section {
     position: relative;
     background: #ffffff;

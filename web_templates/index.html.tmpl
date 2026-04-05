@@ -7,6 +7,10 @@
 
         <main class="main">
             <section>
+                <div id="error-box" class="error-box" hidden role="alert" aria-live="polite">
+                    <button id="error-close" class="error-close" type="button" aria-label="Close error message">x</button>
+                    <div id="error-message"></div>
+                </div>
 
                 {{#if identity}}
                 <h1>Welcome back {{identity.email}}</h1>
@@ -27,6 +31,7 @@
     </script>
     <script>
     window.idElephantPendingAuthorization = {{#if pending_authorization}}true{{else}}false{{/if}};
+    document.getElementById("error-close").addEventListener("click", hideError)
     {{#if identity}}
     document.getElementById("logout").addEventListener("click", logout)
     {{else}}
