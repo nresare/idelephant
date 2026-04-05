@@ -168,7 +168,7 @@ fn is_duplicate_email_error(err: &surrealdb::Error) -> bool {
 }
 
 pub async fn make_db(config: &PersistenceConfig) -> Result<Surreal<Any>, IdentityError> {
-    let db = any::connect(&config.uri).await?;
+    let db: Surreal<Any> = any::connect(&config.uri).await?;
     db.signin(surrealdb::opt::auth::Database {
         namespace: "default".to_string(),
         database: "idelephant".to_string(),
