@@ -1,15 +1,16 @@
 use anyhow::{anyhow, Context, Result};
+use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
+use const_oid::ObjectIdentifier;
 use idelephant_common::{convert_key, ToBoxedSlice};
 use log::debug;
 use p256::ecdsa::signature::{SignatureEncoding, Signer};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use p256::elliptic_curve::{NonZeroScalar, PrimeField};
-use p256::pkcs8::der::asn1::BitString;
-use p256::pkcs8::der::oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
-use p256::pkcs8::ObjectIdentifier;
 use p256::{FieldBytes, NistP256, Scalar};
 use rand::Rng;
 use sha2::{Digest, Sha256};
+use spki::der::asn1::BitString;
+use spki::der::Encode;
 use spki::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 use ssh_agent_client_rs::{Client, Identity};
 use ssh_key::Fingerprint;
@@ -47,7 +48,10 @@ impl Credential for P256Random {
     }
 
     fn get_public_key_bytes(&self) -> Box<[u8]> {
-        make_spki(P256_ALGORITHM, self.key.as_ref()).to_boxed_slice()
+        make_spki(P256_ALGORITHM, self.key.as_ref())
+            .to_der()
+            .expect("Failed to encode subject public key into DER")
+            .into_boxed_slice()
     }
 
     fn id(&self) -> &[u8] {
@@ -144,11 +148,11 @@ mod tests {
         make_random_signing_key, make_spki, Credential, SshAgentBackedCredential,
     };
     use anyhow::Context;
+    use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
     use hex_literal::hex;
-    use idelephant_common::ToBoxedSlice;
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
-    use p256::pkcs8::der::oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
+    use spki::der::Encode;
     use spki::{AlgorithmIdentifier, SubjectPublicKeyInfoOwned};
 
     #[test]
@@ -165,7 +169,10 @@ mod tests {
             parameters: Some(SECP_256_R_1),
         };
 
-        let key_bytes = make_spki(algorithm, signing_key.as_ref()).to_boxed_slice();
+        let key_bytes = make_spki(algorithm, signing_key.as_ref())
+            .to_der()
+            .expect("Failed to encode subject public key into DER")
+            .into_boxed_slice();
         let signature_bytes = signature.to_der().to_bytes();
 
         let verifying_key = verifying_key_from_bytes(&key_bytes)?;
