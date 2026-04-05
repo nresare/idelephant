@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.95"
-sha2 = "0.10.8"
+anyhow =  { workspace = true }
+sha2 = "0.10"
 spki = "0.7.3"
 p256 = "0.13.2"
 ciborium = "0.2.2"

@@ -8,7 +8,7 @@ use p256::pkcs8::der::asn1::BitString;
 use p256::pkcs8::der::oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
 use p256::pkcs8::ObjectIdentifier;
 use p256::{FieldBytes, NistP256, Scalar};
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use spki::{AlgorithmIdentifier, SubjectPublicKeyInfo};
 use ssh_agent_client_rs::{Client, Identity};
