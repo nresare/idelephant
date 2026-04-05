@@ -49,6 +49,7 @@ base64 = "0.22"
 thiserror = "2.0"
 anyhow = "1.0"
 hex-literal = "1.1"
+const-oid = { version = "0.10", features = ["db"] }
 spki = { version = "0.8", features = ["alloc"]}
 sha2 = "0.10.8"
 tracing-subscriber = {  version = "0.3", features = ["env-filter"] }

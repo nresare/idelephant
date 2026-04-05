@@ -2313,6 +2313,7 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
+ "const-oid 0.10.2",
  "hex-literal",
  "idelephant_common",
  "idelephant_webauthn",
