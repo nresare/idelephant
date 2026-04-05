@@ -2,7 +2,7 @@ use crate::error::IdentityError;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use bytes::Bytes;
-use rand::{random, rng, RngCore};
+use rand::{random, rng, Rng};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use surrealdb::types::SurrealValue;

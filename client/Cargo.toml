@@ -14,7 +14,7 @@ base64 = {workspace = true}
 idelephant_webauthn = {path = "../webauthn"}
 idelephant_common = {path = "../common"}
 p256 = { version = "0.13.2", features = ["ecdsa"] }
-rand = "0.9.0"
+rand = "0.10"
 spki = { workspace = true }
 sha2 = "0.11"
 log = "0.4"
