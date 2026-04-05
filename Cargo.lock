@@ -5572,7 +5572,7 @@ dependencies = [
 [[package]]
 name = "tower-sessions-surrealdb-store"
 version = "0.7.0"
-source = "git+https://github.com/nresare/tower-sessions-surrealdb-store?branch=define_table_tower_015#c0037fefbf457f6e0afbab6bc532885790b156e6"
+source = "git+https://github.com/nresare/tower-sessions-surrealdb-store?branch=combined_surreal3_fixes#82dad1347fd9a09254c914a4ddb7b68fb6598a3c"
 dependencies = [
  "async-trait",
  "rmp-serde",
