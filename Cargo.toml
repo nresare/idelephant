@@ -25,7 +25,7 @@ tracing-subscriber = {  workspace = true }
 rand = "0.10"
 base64 = { workspace = true }
 sha2 = { workspace = true }
-tower-sessions-surrealdb-store = { git = "https://github.com/nresare/tower-sessions-surrealdb-store", branch = "define_table_tower_015" }
+tower-sessions-surrealdb-store = { git = "https://github.com/nresare/tower-sessions-surrealdb-store", branch = "combined_surreal3_fixes" }
 surrealdb = { version = "3", default-features = false, features = ["kv-surrealkv"] }
 tower-sessions = "0.15"
 time = "0.3.46"
