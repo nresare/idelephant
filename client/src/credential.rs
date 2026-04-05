@@ -11,7 +11,7 @@ use p256::{FieldBytes, NistP256, Scalar};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use spki::{AlgorithmIdentifier, SubjectPublicKeyInfo};
-use ssh_agent_client_rs::Client;
+use ssh_agent_client_rs::{Client, Identity};
 use ssh_key::Fingerprint;
 use std::env;
 use std::path::Path;
@@ -67,14 +67,20 @@ impl SshAgentBackedCredential {
         let path = env::var("SSH_AUTH_SOCK").expect("SSH_AUTH_SOCK is not set");
         debug!("using the ssh-agent at '{}' for authentication", path);
         let mut client = Client::connect(Path::new(path.as_str()))?;
-        let mut keys = client.list_identities()?.into_iter();
+        let mut keys = client.list_all_identities()?.into_iter();
         let key = keys.next().ok_or_else(|| {
             anyhow!("For now we only handle the case when the ssh-agent provides one key")
         })?;
+        let Identity::PublicKey(key) = key else {
+            return Err(anyhow!("The ssh-agent did not provide a public key"));
+        };
         let fingerprint = key.fingerprint(Default::default());
         let public_key_bytes = convert_key(&key)
             .with_context(|| format!("Failed to convert SSH key '{}' from SSH agent", fingerprint))?
             .to_boxed_slice();
+
+        let key = (*key).into_owned();
+
         Ok(Self {
             client,
             key,
