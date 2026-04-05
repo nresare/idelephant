@@ -15,7 +15,17 @@ pub fn authenticate(
     user_id: Vec<u8>,
     base: &str,
 ) -> anyhow::Result<()> {
-    let challenge = get_auth_challenge(&client.get(format!("{base}/auth-start")).send()?.json()?)?;
+    let auth_start_response = client.get(format!("{base}/auth-start")).send()?;
+    if !auth_start_response.status().is_success() {
+        let status = auth_start_response.status();
+        let body = auth_start_response.text()?;
+        return Err(anyhow!(
+            "Failed to start authentication, server returned {}: {}",
+            status,
+            body.trim()
+        ));
+    }
+    let challenge = get_auth_challenge(&auth_start_response.json()?)?;
     let auth_finish_request = make_auth_finish_request(challenge, user_id, credential).json();
     debug!(
         "auth-finish request JSON: {}",

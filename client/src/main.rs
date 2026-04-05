@@ -132,7 +132,11 @@ fn invite(client: &Client, email: String, admin: bool, base: &str) -> Result<(),
         .send()?;
     match response.status() {
         StatusCode::OK => Ok(()),
-        code => Err(anyhow!("Failed to invite user, status: {code}")),
+        code => Err(anyhow!(
+            "Failed to invite user, server returned {}: {}",
+            code,
+            response.text()?.trim()
+        )),
     }
 }
 
@@ -147,6 +151,10 @@ fn create_client(
         .send()?;
     match response.status() {
         StatusCode::CREATED => Ok(()),
-        code => Err(anyhow!("Failed to create OAuth client, status: {code}")),
+        code => Err(anyhow!(
+            "Failed to create OAuth client, server returned {}: {}",
+            code,
+            response.text()?.trim()
+        )),
     }
 }
