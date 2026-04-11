@@ -16,7 +16,7 @@ but I have a plan and I think that the other pieces will come.
 ## Local development 
 
 1. Install a local surrealdb. I installed mine with `brew install surrealdb/tap/surreal`
-2. in a shell, start with `surreal start --user noa --pass secret surrealkv://tmp/devdb`
+2. in a shell, start with `surreal start --user noa --pass secret surrealkv://$HOME/slask/devdb`
 3. Create a database user by issuing the following commands:
    1. `surreal sql --user noa --pass secret`
    2. `use ns default db idelephant`
