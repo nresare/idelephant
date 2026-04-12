@@ -160,7 +160,7 @@ async fn build_app_state(config: &Config, db: &Surreal<Any>) -> Result<AppState,
         .map_err(|e| Fatal::AdminKey(e.into()))?;
 
     let templates = Arc::new(Templates::new()?);
-    let oidc = Arc::new(OidcService::new(&config.origin).map_err(Fatal::Other)?);
+    let oidc = Arc::new(OidcService::new(&config.origin, ps.as_ref().clone()));
 
     let state = AppState {
         ps,
