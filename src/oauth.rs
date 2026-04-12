@@ -79,7 +79,6 @@ struct CreateOAuthClientRequest {
     client_id: String,
     name: String,
     redirect_uris: Vec<String>,
-    pkce_required: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -115,7 +114,6 @@ async fn create_oauth_client(
             &request.client_id,
             &request.name,
             request.redirect_uris,
-            request.pkce_required,
         )
         .await?;
     Ok(axum::http::StatusCode::CREATED)
@@ -274,7 +272,7 @@ async fn token(
 
     validate_token_request(&request, &code)?;
 
-    let Some(client) = persistence_service
+    let Some(_client) = persistence_service
         .fetch_oauth_client(&request.client_id)
         .await?
     else {
@@ -282,7 +280,7 @@ async fn token(
             "Unknown OAuth client".to_string(),
         ));
     };
-    if client.pkce_required && !verify_pkce(&request.code_verifier, &code.code_challenge) {
+    if !verify_pkce(&request.code_verifier, &code.code_challenge) {
         return Err(IdentityError::BadRequest(
             "code_verifier did not match the PKCE challenge".to_string(),
         ));
@@ -446,7 +444,7 @@ fn validate_authorization_request(
     let code_challenge_method = request.code_challenge_method.ok_or_else(|| {
         IdentityError::BadRequest("code_challenge_method is required".to_string())
     })?;
-    if client.pkce_required && code_challenge_method != "S256" {
+    if code_challenge_method != "S256" {
         return Err(IdentityError::BadRequest(
             "Only PKCE code_challenge_method=S256 is supported".to_string(),
         ));
@@ -675,7 +673,6 @@ mod tests {
             client_id: "client-1".to_string(),
             name: "Example client".to_string(),
             redirect_uris: vec!["http://localhost:4000/callback".to_string()],
-            pkce_required: true,
             id: RecordId::new("oauth_client", "client-1"),
         }
     }
@@ -892,7 +889,6 @@ mod tests {
                 "client-1",
                 "Example client",
                 vec!["http://localhost:4000/callback".to_string()],
-                true,
             )
             .await?;
 
@@ -1076,7 +1072,6 @@ mod tests {
                         client_id: "configured-client".to_string(),
                         name: "Configured Client".to_string(),
                         redirect_uris: vec!["http://localhost:4000/callback".to_string()],
-                        pkce_required: true,
                     })?))?,
             )
             .await?;

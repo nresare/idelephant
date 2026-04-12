@@ -52,8 +52,6 @@ enum Command {
         name: String,
         #[arg(long = "redirect-uri", required = true)]
         redirect_uris: Vec<String>,
-        #[arg(long = "pkce-required", default_value_t = true)]
-        pkce_required: bool,
     },
 }
 
@@ -92,7 +90,6 @@ fn main() -> anyhow::Result<()> {
             client_id,
             name,
             redirect_uris,
-            pkce_required,
         } => {
             info!("Creating OAuth client '{}'", client_id);
             create_client(
@@ -101,7 +98,6 @@ fn main() -> anyhow::Result<()> {
                     client_id,
                     name,
                     redirect_uris,
-                    pkce_required,
                 },
                 &args.endpoint,
             )?;
@@ -122,7 +118,6 @@ struct CreateClientRequest {
     client_id: String,
     name: String,
     redirect_uris: Vec<String>,
-    pkce_required: bool,
 }
 
 fn invite(client: &Client, email: String, admin: bool, base: &str) -> Result<(), anyhow::Error> {
