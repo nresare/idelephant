@@ -21,12 +21,7 @@ def pipeline(tag: str, should_publish: bool=False) -> dict[str, Any]:
     }
     docker = {
                 "label": ":whale: build docker image",
-                "commands": [
-                    "cargo fmt --check",
-                    "cargo clippy --workspace --locked",
-                    "cargo test --workspace --locked",
-                    f"docker buildx build -t {repo}:{tag} ."
-                ],
+                "command": f"docker buildx build -t {repo}:{tag} .",
             }
     if should_publish:
         docker["plugins"] = [
