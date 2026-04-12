@@ -42,7 +42,6 @@ struct NewOAuthClient {
     client_id: String,
     name: String,
     redirect_uris: Vec<String>,
-    pkce_required: bool,
 }
 
 #[derive(Serialize, SurrealValue)]
@@ -108,7 +107,6 @@ pub struct OAuthClient {
     pub client_id: String,
     pub name: String,
     pub redirect_uris: Vec<String>,
-    pub pkce_required: bool,
     pub id: RecordId,
 }
 
@@ -240,7 +238,6 @@ impl PersistenceService {
         client_id: &str,
         name: &str,
         redirect_uris: Vec<String>,
-        pkce_required: bool,
     ) -> Result<String, IdentityError> {
         let result: Record = self
             .db
@@ -249,7 +246,6 @@ impl PersistenceService {
                 client_id: client_id.to_string(),
                 name: name.to_string(),
                 redirect_uris,
-                pkce_required,
             })
             .await?
             .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
@@ -621,13 +617,12 @@ mod tests {
         let ps = PersistenceService::new(db);
         let redirect_uris = vec!["http://localhost:4000/callback".to_string()];
 
-        ps.create_oauth_client("client-1", "Example client", redirect_uris.clone(), true)
+        ps.create_oauth_client("client-1", "Example client", redirect_uris.clone())
             .await?;
         let fetched = ps.fetch_oauth_client("client-1").await?.unwrap();
         assert_eq!(fetched.client_id, "client-1");
         assert_eq!(fetched.name, "Example client");
         assert_eq!(fetched.redirect_uris, redirect_uris);
-        assert!(fetched.pkce_required);
         Ok(())
     }
 
