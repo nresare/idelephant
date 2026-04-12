@@ -53,7 +53,6 @@ struct NewAuthorizationCode {
     scopes: Vec<String>,
     nonce: Option<String>,
     code_challenge: String,
-    code_challenge_method: String,
     expires_at: DateTime<Utc>,
     used_at: Option<DateTime<Utc>>,
 }
@@ -66,7 +65,6 @@ pub struct CreateAuthorizationCode {
     pub scopes: Vec<String>,
     pub nonce: Option<String>,
     pub code_challenge: String,
-    pub code_challenge_method: String,
     pub expires_at: DateTime<Utc>,
 }
 
@@ -119,7 +117,6 @@ pub struct AuthorizationCode {
     pub scopes: Vec<String>,
     pub nonce: Option<String>,
     pub code_challenge: String,
-    pub code_challenge_method: String,
     pub expires_at: DateTime<Utc>,
     pub used_at: Option<DateTime<Utc>>,
     pub id: RecordId,
@@ -279,7 +276,6 @@ impl PersistenceService {
                 scopes: code.scopes,
                 nonce: code.nonce,
                 code_challenge: code.code_challenge,
-                code_challenge_method: code.code_challenge_method,
                 expires_at: code.expires_at,
                 used_at: None,
             })
@@ -320,7 +316,6 @@ impl PersistenceService {
                 scopes: code.scopes,
                 nonce: code.nonce,
                 code_challenge: code.code_challenge,
-                code_challenge_method: code.code_challenge_method,
                 expires_at: code.expires_at,
                 used_at: code.used_at,
             })
@@ -641,7 +636,6 @@ mod tests {
             scopes: scopes.clone(),
             nonce: nonce.clone(),
             code_challenge: "challenge".to_string(),
-            code_challenge_method: "S256".to_string(),
             expires_at,
         })
         .await?;
@@ -653,7 +647,6 @@ mod tests {
         assert_eq!(fetched.scopes, scopes);
         assert_eq!(fetched.nonce, nonce);
         assert_eq!(fetched.code_challenge, "challenge");
-        assert_eq!(fetched.code_challenge_method, "S256");
         assert_eq!(fetched.expires_at, expires_at);
         assert!(fetched.used_at.is_none());
 

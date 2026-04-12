@@ -57,7 +57,6 @@ struct PendingAuthorizationRequest {
     state: Option<String>,
     nonce: Option<String>,
     code_challenge: String,
-    code_challenge_method: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -236,7 +235,6 @@ async fn authorize_consent(
             scopes: pending.scopes.clone(),
             nonce: pending.nonce.clone(),
             code_challenge: pending.code_challenge.clone(),
-            code_challenge_method: pending.code_challenge_method.clone(),
             expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
         })
         .await?;
@@ -389,7 +387,6 @@ async fn continue_authorization(
                 scopes: pending.scopes.clone(),
                 nonce: pending.nonce.clone(),
                 code_challenge: pending.code_challenge.clone(),
-                code_challenge_method: pending.code_challenge_method.clone(),
                 expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
             })
             .await?;
@@ -462,7 +459,6 @@ fn validate_authorization_request(
         state: request.state,
         nonce: request.nonce,
         code_challenge,
-        code_challenge_method,
     })
 }
 
@@ -507,11 +503,6 @@ fn validate_token_request(
     if code.expires_at < chrono::Utc::now() {
         return Err(IdentityError::BadRequest(
             "authorization code has expired".to_string(),
-        ));
-    }
-    if code.code_challenge_method != "S256" {
-        return Err(IdentityError::BadRequest(
-            "Unsupported code_challenge_method".to_string(),
         ));
     }
     if request.code_verifier.is_empty() {
@@ -753,7 +744,6 @@ mod tests {
             scopes: vec!["openid".to_string(), "email".to_string()],
             nonce: Some("nonce-123".to_string()),
             code_challenge,
-            code_challenge_method: "S256".to_string(),
             expires_at: Utc::now() + Duration::minutes(5),
             used_at: None,
             id: RecordId::new("authorization_code", "code-123"),
