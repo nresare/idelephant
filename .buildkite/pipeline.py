@@ -11,9 +11,16 @@ from image_version import version
 
 def pipeline(tag: str, should_publish: bool=False) -> dict[str, Any]:
     repo = "packages.buildkite.com/nresare/idelephant/idelephant"
-    step = {
+    rust_test = {
+        "label": ":rust: rust build and test",
+        "commands": [
+            "cargo fmt --check",
+            "cargo clippy --workspace --locked",
+            "cargo test --workspace --locked",
+        ]
+    }
+    docker = {
                 "label": ":whale: build docker image",
-
                 "commands": [
                     "cargo fmt --check",
                     "cargo clippy --workspace --locked",
@@ -22,10 +29,10 @@ def pipeline(tag: str, should_publish: bool=False) -> dict[str, Any]:
                 ],
             }
     if should_publish:
-        step["plugins"] = [
+        docker["plugins"] = [
             {"docker-image-push#v1.1.0": {"provider": "buildkite", "image": "idelephant", "tag": tag,"buildkite": {"auth-method": "oidc"}}},
         ]
-    return {"steps": [step]}
+    return {"steps": [rust_test, docker]}
 
 
 def main():
