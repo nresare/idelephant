@@ -24,7 +24,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-TAG_RE = re.compile(r"^v?(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)$")
+TAG_RE = re.compile(
+    r"^v?(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)$"
+)
 
 
 @dataclass(frozen=True, order=True)
