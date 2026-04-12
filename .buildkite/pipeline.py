@@ -9,11 +9,17 @@ import os
 from typing import Any
 from image_version import version
 
-def pipeline(tag: str, should_publish: bool=False) -> dict[Any]:
+def pipeline(tag: str, should_publish: bool=False) -> dict[str, Any]:
     repo = "packages.buildkite.com/nresare/idelephant/idelephant"
     step = {
                 "label": ":whale: build docker image",
-                "command": f"docker buildx build -t {repo}:{tag} .",
+
+                "commands": [
+                    "cargo fmt --check",
+                    "cargo clippy --workspace --locked",
+                    "cargo test --workspace --locked",
+                    f"docker buildx build -t {repo}:{tag} ."
+                ],
             }
     if should_publish:
         step["plugins"] = [
