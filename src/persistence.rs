@@ -46,7 +46,7 @@ struct NewOAuthClient {
 
 #[derive(Serialize, SurrealValue)]
 struct NewAuthorizationCode {
-    code_hash: String,
+    code: String,
     client_id: String,
     subject_id: String,
     redirect_uri: String,
@@ -58,7 +58,7 @@ struct NewAuthorizationCode {
 }
 
 pub struct CreateAuthorizationCode {
-    pub code_hash: String,
+    pub code: String,
     pub client_id: String,
     pub subject_id: String,
     pub redirect_uri: String,
@@ -110,7 +110,7 @@ pub struct OAuthClient {
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct AuthorizationCode {
-    pub code_hash: String,
+    pub code: String,
     pub client_id: String,
     pub subject_id: String,
     pub redirect_uri: String,
@@ -188,7 +188,7 @@ async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
         "DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE;
          DEFINE INDEX IF NOT EXISTS inviteToken ON identity FIELDS state.Invited.token UNIQUE;
          DEFINE INDEX IF NOT EXISTS oauthClientId ON oauth_client FIELDS client_id UNIQUE;
-         DEFINE INDEX IF NOT EXISTS authorizationCodeHash ON authorization_code FIELDS code_hash UNIQUE;
+         DEFINE INDEX IF NOT EXISTS authorizationCode ON authorization_code FIELDS code UNIQUE;
          DEFINE INDEX IF NOT EXISTS accessTokenHash ON access_token FIELDS token_hash UNIQUE;
          DEFINE INDEX IF NOT EXISTS consentGrantBySubjectClient ON consent_grant FIELDS subject_id, client_id UNIQUE;
          DEFINE TABLE IF NOT EXISTS sessions;"
@@ -269,7 +269,7 @@ impl PersistenceService {
             .db
             .create("authorization_code")
             .content(NewAuthorizationCode {
-                code_hash: code.code_hash,
+                code: code.code,
                 client_id: code.client_id,
                 subject_id: code.subject_id,
                 redirect_uri: code.redirect_uri,
@@ -286,38 +286,38 @@ impl PersistenceService {
 
     pub async fn fetch_authorization_code(
         &self,
-        code_hash: &str,
+        code: &str,
     ) -> Result<Option<AuthorizationCode>, IdentityError> {
         let mut result = self
             .db
-            .query("SELECT * FROM authorization_code WHERE code_hash = $code_hash LIMIT 1")
-            .bind(("code_hash", code_hash.to_string()))
+            .query("SELECT * FROM authorization_code WHERE code = $code LIMIT 1")
+            .bind(("code", code.to_string()))
             .await?;
         Ok(result.take(0)?)
     }
 
     pub async fn mark_authorization_code_used(
         &self,
-        code_hash: &str,
+        code: &str,
         used_at: DateTime<Utc>,
     ) -> Result<bool, IdentityError> {
-        let Some(mut code) = self.fetch_authorization_code(code_hash).await? else {
+        let Some(mut authorization_code) = self.fetch_authorization_code(code).await? else {
             return Ok(false);
         };
-        code.used_at = Some(used_at);
+        authorization_code.used_at = Some(used_at);
         let result: Option<AuthorizationCode> = self
             .db
-            .update(code.id.clone())
+            .update(authorization_code.id.clone())
             .content(NewAuthorizationCode {
-                code_hash: code.code_hash,
-                client_id: code.client_id,
-                subject_id: code.subject_id,
-                redirect_uri: code.redirect_uri,
-                scopes: code.scopes,
-                nonce: code.nonce,
-                code_challenge: code.code_challenge,
-                expires_at: code.expires_at,
-                used_at: code.used_at,
+                code: authorization_code.code,
+                client_id: authorization_code.client_id,
+                subject_id: authorization_code.subject_id,
+                redirect_uri: authorization_code.redirect_uri,
+                scopes: authorization_code.scopes,
+                nonce: authorization_code.nonce,
+                code_challenge: authorization_code.code_challenge,
+                expires_at: authorization_code.expires_at,
+                used_at: authorization_code.used_at,
             })
             .await?;
         Ok(result.is_some())
@@ -629,7 +629,7 @@ mod tests {
         let scopes = vec!["openid".to_string(), "email".to_string()];
         let nonce = Some("nonce-123".to_string());
         ps.create_authorization_code(CreateAuthorizationCode {
-            code_hash: "code-hash".to_string(),
+            code: "code-hash".to_string(),
             client_id: "client-1".to_string(),
             subject_id: "identity:alice".to_string(),
             redirect_uri: "http://localhost:4000/callback".to_string(),
@@ -640,7 +640,7 @@ mod tests {
         })
         .await?;
         let fetched = ps.fetch_authorization_code("code-hash").await?.unwrap();
-        assert_eq!(fetched.code_hash, "code-hash");
+        assert_eq!(fetched.code, "code-hash");
         assert_eq!(fetched.client_id, "client-1");
         assert_eq!(fetched.subject_id, "identity:alice");
         assert_eq!(fetched.redirect_uri, "http://localhost:4000/callback");
