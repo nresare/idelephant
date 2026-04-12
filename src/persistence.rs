@@ -139,6 +139,25 @@ pub struct ConsentGrant {
     pub id: RecordId,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
+pub struct JwkKey {
+    pub kid: String,
+    pub private_key_der: Vec<u8>,
+    pub active_from: DateTime<Utc>,
+    pub retire_after: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub id: RecordId,
+}
+
+#[derive(Serialize, SurrealValue)]
+struct NewJwkKey {
+    kid: String,
+    private_key_der: Vec<u8>,
+    active_from: DateTime<Utc>,
+    retire_after: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+}
+
 #[derive(Clone)]
 pub struct PersistenceService {
     db: Surreal<Any>,
@@ -158,6 +177,11 @@ fn record_id_key_to_string(key: &RecordIdKey) -> Result<String, IdentityError> {
 fn is_duplicate_email_error(err: &surrealdb::Error) -> bool {
     err.message()
         .contains("Database index `identityEmail` already contains")
+}
+
+fn is_duplicate_jwk_slot_error(err: &surrealdb::Error) -> bool {
+    err.message()
+        .contains("Database index `jwkKeyActiveFrom` already contains")
 }
 
 pub async fn make_db(config: &PersistenceConfig) -> Result<Surreal<Any>, IdentityError> {
@@ -189,6 +213,8 @@ async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
          DEFINE INDEX IF NOT EXISTS authorizationCode ON authorization_code FIELDS code UNIQUE;
          DEFINE INDEX IF NOT EXISTS accessTokenHash ON access_token FIELDS token_hash UNIQUE;
          DEFINE INDEX IF NOT EXISTS consentGrantBySubjectClient ON consent_grant FIELDS subject_id, client_id UNIQUE;
+         DEFINE INDEX IF NOT EXISTS jwkKeyKid ON jwk_key FIELDS kid UNIQUE;
+         DEFINE INDEX IF NOT EXISTS jwkKeyActiveFrom ON jwk_key FIELDS active_from UNIQUE;
          DEFINE TABLE IF NOT EXISTS sessions;"
 
     )
@@ -257,6 +283,85 @@ impl PersistenceService {
             .bind(("client_id", client_id.to_string()))
             .await?;
         Ok(result.take(0)?)
+    }
+
+    pub async fn create_jwk_key(
+        &self,
+        kid: &str,
+        private_key_der: &[u8],
+        active_from: DateTime<Utc>,
+        retire_after: DateTime<Utc>,
+        created_at: DateTime<Utc>,
+    ) -> Result<JwkKey, IdentityError> {
+        let result: Option<JwkKey> = self
+            .db
+            .create("jwk_key")
+            .content(NewJwkKey {
+                kid: kid.to_string(),
+                private_key_der: private_key_der.to_vec(),
+                active_from,
+                retire_after,
+                created_at,
+            })
+            .await?;
+        result.ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))
+    }
+
+    pub async fn fetch_jwk_key_by_slot(
+        &self,
+        active_from: DateTime<Utc>,
+    ) -> Result<Option<JwkKey>, IdentityError> {
+        let mut result = self
+            .db
+            .query("SELECT * FROM jwk_key WHERE active_from = $active_from LIMIT 1")
+            .bind(("active_from", active_from))
+            .await?;
+        Ok(result.take(0)?)
+    }
+
+    pub async fn fetch_signing_key_for_time(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Option<JwkKey>, IdentityError> {
+        let mut result = self
+            .db
+            .query(
+                "SELECT * FROM jwk_key
+                 WHERE active_from <= $now AND retire_after > $now
+                 ORDER BY active_from DESC
+                 LIMIT 1",
+            )
+            .bind(("now", now))
+            .await?;
+        Ok(result.take(0)?)
+    }
+
+    pub async fn list_jwks_keys(&self, now: DateTime<Utc>) -> Result<Vec<JwkKey>, IdentityError> {
+        let mut result = self
+            .db
+            .query(
+                "SELECT * FROM jwk_key
+                 WHERE retire_after > $now
+                 ORDER BY active_from ASC",
+            )
+            .bind(("now", now))
+            .await?;
+        Ok(result.take(0)?)
+    }
+
+    pub async fn delete_expired_jwk_keys(&self, now: DateTime<Utc>) -> Result<(), IdentityError> {
+        self.db
+            .query("DELETE jwk_key WHERE retire_after <= $now")
+            .bind(("now", now))
+            .await?;
+        Ok(())
+    }
+
+    pub fn is_duplicate_jwk_key_error(&self, err: &IdentityError) -> bool {
+        match err {
+            IdentityError::PersistentStorage(inner) => is_duplicate_jwk_slot_error(inner),
+            _ => false,
+        }
     }
 
     pub async fn create_authorization_code(
@@ -512,7 +617,7 @@ mod tests {
         mem_db, CreateAuthorizationCode, Credential, Identity, IdentityState, PersistenceService,
     };
     use anyhow::Result;
-    use chrono::{Duration, Utc};
+    use chrono::{Duration, TimeZone, Utc};
 
     #[tokio::test]
     async fn test_persist() -> Result<()> {
@@ -652,6 +757,86 @@ mod tests {
         assert_eq!(fetched.subject_id, "identity:alice");
         assert_eq!(fetched.scopes, scopes);
         assert_eq!(fetched.expires_at, expires_at);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_persist_and_fetch_jwk_key_by_slot() -> Result<()> {
+        let db = mem_db().await?;
+        let ps = PersistenceService::new(db);
+        let active_from = Utc.with_ymd_and_hms(2026, 4, 12, 8, 0, 0).unwrap();
+        let retire_after = active_from + Duration::hours(9);
+        let created_at = active_from - Duration::minutes(5);
+
+        let created = ps
+            .create_jwk_key(
+                "kid-1",
+                b"private-key",
+                active_from,
+                retire_after,
+                created_at,
+            )
+            .await?;
+        let fetched = ps.fetch_jwk_key_by_slot(active_from).await?.unwrap();
+        assert_eq!(created.kid, "kid-1");
+        assert_eq!(fetched.kid, "kid-1");
+        assert_eq!(fetched.private_key_der, b"private-key");
+        assert_eq!(fetched.active_from, active_from);
+        assert_eq!(fetched.retire_after, retire_after);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_jwk_slot_is_rejected() -> Result<()> {
+        let db = mem_db().await?;
+        let ps = PersistenceService::new(db);
+        let active_from = Utc.with_ymd_and_hms(2026, 4, 12, 8, 0, 0).unwrap();
+        let retire_after = active_from + Duration::hours(9);
+
+        ps.create_jwk_key("kid-1", b"key-1", active_from, retire_after, active_from)
+            .await?;
+        let err = ps
+            .create_jwk_key("kid-2", b"key-2", active_from, retire_after, active_from)
+            .await
+            .unwrap_err();
+        assert!(ps.is_duplicate_jwk_key_error(&err));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_and_cleanup_jwk_keys() -> Result<()> {
+        let db = mem_db().await?;
+        let ps = PersistenceService::new(db);
+        let retired = Utc.with_ymd_and_hms(2026, 4, 12, 0, 0, 0).unwrap();
+        let current = Utc.with_ymd_and_hms(2026, 4, 12, 8, 0, 0).unwrap();
+        let next = Utc.with_ymd_and_hms(2026, 4, 12, 16, 0, 0).unwrap();
+        ps.create_jwk_key(
+            "kid-retired",
+            b"retired",
+            retired,
+            retired + Duration::hours(8),
+            retired,
+        )
+        .await?;
+        ps.create_jwk_key(
+            "kid-current",
+            b"current",
+            current,
+            current + Duration::hours(9),
+            current,
+        )
+        .await?;
+        ps.create_jwk_key("kid-next", b"next", next, next + Duration::hours(9), next)
+            .await?;
+
+        let now = Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap();
+        let visible = ps.list_jwks_keys(now).await?;
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].kid, "kid-current");
+        assert_eq!(visible[1].kid, "kid-next");
+
+        ps.delete_expired_jwk_keys(now).await?;
+        assert!(ps.fetch_jwk_key_by_slot(retired).await?.is_none());
         Ok(())
     }
 

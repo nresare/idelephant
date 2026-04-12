@@ -305,12 +305,16 @@ async fn token(
                     "authorization code references unknown identity".to_string(),
                 )
             })?;
-        Some(oidc_service.mint_id_token(
-            &code.subject_id,
-            &code.client_id,
-            code.nonce.as_deref(),
-            &identity.email,
-        )?)
+        Some(
+            oidc_service
+                .mint_id_token(
+                    &code.subject_id,
+                    &code.client_id,
+                    code.nonce.as_deref(),
+                    &identity.email,
+                )
+                .await?,
+        )
     } else {
         None
     };
@@ -354,8 +358,10 @@ async fn openid_configuration(
     axum::Json(oidc_service.configuration())
 }
 
-async fn jwks(State(oidc_service): State<OidcService>) -> axum::Json<JwksResponse> {
-    axum::Json(oidc_service.jwks())
+async fn jwks(
+    State(oidc_service): State<OidcService>,
+) -> Result<axum::Json<JwksResponse>, IdentityError> {
+    Ok(axum::Json(oidc_service.jwks().await?))
 }
 
 async fn continue_authorization(
@@ -891,7 +897,7 @@ mod tests {
         let state = AppState {
             ps: persistence.clone(),
             is: Arc::new(InviteService::new(
-                persistence,
+                persistence.clone(),
                 &EmailConfig {
                     relay_host: "localhost".to_string(),
                     username: None,
@@ -901,7 +907,10 @@ mod tests {
                 "http://localhost:8080",
             )?),
             templates: Arc::new(Templates::new()?),
-            oidc: Arc::new(OidcService::new("http://localhost:8080")?),
+            oidc: Arc::new(OidcService::new(
+                "http://localhost:8080",
+                persistence.as_ref().clone(),
+            )),
             rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
         };
         let app = test_app(state, db);
@@ -927,7 +936,7 @@ mod tests {
             .await?;
         assert_eq!(jwks.status(), StatusCode::OK);
         let jwks_json: Value = serde_json::from_slice(&response_body(jwks).await)?;
-        assert_eq!(jwks_json["keys"].as_array().unwrap().len(), 1);
+        assert_eq!(jwks_json["keys"].as_array().unwrap().len(), 2);
 
         let login = app
             .clone()
@@ -1055,7 +1064,7 @@ mod tests {
         let state = AppState {
             ps: persistence.clone(),
             is: Arc::new(InviteService::new(
-                persistence,
+                persistence.clone(),
                 &EmailConfig {
                     relay_host: "localhost".to_string(),
                     username: None,
@@ -1065,7 +1074,10 @@ mod tests {
                 "http://localhost:8080",
             )?),
             templates: Arc::new(Templates::new()?),
-            oidc: Arc::new(OidcService::new("http://localhost:8080")?),
+            oidc: Arc::new(OidcService::new(
+                "http://localhost:8080",
+                persistence.as_ref().clone(),
+            )),
             rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
         };
         let app = test_app(state, db);
@@ -1135,7 +1147,7 @@ mod tests {
         let state = AppState {
             ps: persistence.clone(),
             is: Arc::new(InviteService::new(
-                persistence,
+                persistence.clone(),
                 &EmailConfig {
                     relay_host: "localhost".to_string(),
                     username: None,
@@ -1145,7 +1157,10 @@ mod tests {
                 "http://localhost:8080",
             )?),
             templates: Arc::new(Templates::new()?),
-            oidc: Arc::new(OidcService::new("http://localhost:8080")?),
+            oidc: Arc::new(OidcService::new(
+                "http://localhost:8080",
+                persistence.as_ref().clone(),
+            )),
             rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
         };
         let app = test_app(state, db);
@@ -1248,7 +1263,10 @@ mod tests {
                 "http://localhost:8080",
             )?),
             templates: Arc::new(Templates::new()?),
-            oidc: Arc::new(OidcService::new("http://localhost:8080")?),
+            oidc: Arc::new(OidcService::new(
+                "http://localhost:8080",
+                persistence.as_ref().clone(),
+            )),
             rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
         };
         let app = test_app(state, db);

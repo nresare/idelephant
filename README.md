@@ -10,8 +10,10 @@ but I have a plan and I think that the other pieces will come.
 
 * This software is built in Rust, relying on the crates.io ecosystem when appropriate. 
 * I use the [axum](https://github.com/tokio-rs/axum) web framework for the web parts
-* I use an embedded [SurrealDB](https://surrealdb.com) for persistent storage, for now. I believe it should be 
-  pretty straight forward to move the system to use a hosted or standalone SurrealDB instance instead.
+* I use [SurrealDB](https://surrealdb.com) for persistent storage.
+* Short-lived JWK signing keys are stored in the database and rotated every 8 hours. While this means 
+  that sensitive information is stored in the database, the short lifetime of the keys somewhat mitigates
+  this risk and enables us to have multiple idelephant instances running in parallel
 
 ## Local development 
 
