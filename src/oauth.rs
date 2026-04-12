@@ -109,11 +109,7 @@ async fn create_oauth_client(
     }
     validate_client_registration_request(&request)?;
     persistence_service
-        .create_oauth_client(
-            &request.client_id,
-            &request.name,
-            request.redirect_uris,
-        )
+        .create_oauth_client(&request.client_id, &request.name, request.redirect_uris)
         .await?;
     Ok(axum::http::StatusCode::CREATED)
 }
@@ -134,7 +130,6 @@ async fn authorize(
         ));
     };
     let pending = validate_authorization_request(request, &client)?;
-    session.insert(PENDING_AUTHORIZATION, &pending).await?;
     continue_authorization(
         session,
         persistence_service,
@@ -142,6 +137,7 @@ async fn authorize(
         templates,
         &client,
         pending,
+        false,
     )
     .await
 }
@@ -176,6 +172,7 @@ async fn resume_authorize(
         templates,
         &client,
         pending,
+        true,
     )
     .await
 }
@@ -296,7 +293,7 @@ async fn token(
         )
         .await?;
     persistence_service
-        .mark_authorization_code_used(&request.code, chrono::Utc::now())
+        .delete_authorization_code(&request.code)
         .await?;
 
     let id_token = if code.scopes.iter().any(|scope| scope == "openid") {
@@ -368,8 +365,12 @@ async fn continue_authorization(
     templates: Templates,
     client: &OAuthClient,
     pending: PendingAuthorizationRequest,
+    pending_stored: bool,
 ) -> Result<Response, IdentityError> {
     let Some(identity): Option<Identity> = session.get(IDENTITY).await? else {
+        if !pending_stored {
+            session.insert(PENDING_AUTHORIZATION, &pending).await?;
+        }
         return Ok(Redirect::to("/").into_response());
     };
 
@@ -390,14 +391,20 @@ async fn continue_authorization(
                 expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
             })
             .await?;
-        session
-            .remove::<PendingAuthorizationRequest>(PENDING_AUTHORIZATION)
-            .await?;
+        if pending_stored {
+            session
+                .remove::<PendingAuthorizationRequest>(PENDING_AUTHORIZATION)
+                .await?;
+        }
         return Ok(Redirect::to(&build_redirect(
             &pending.redirect_uri,
             &[("code", Some(&code)), ("state", pending.state.as_deref())],
         )?)
         .into_response());
+    }
+
+    if !pending_stored {
+        session.insert(PENDING_AUTHORIZATION, &pending).await?;
     }
 
     let body = templates.render(
@@ -493,11 +500,6 @@ fn validate_token_request(
     if code.redirect_uri != request.redirect_uri {
         return Err(IdentityError::BadRequest(
             "redirect_uri did not match the authorization request".to_string(),
-        ));
-    }
-    if code.used_at.is_some() {
-        return Err(IdentityError::BadRequest(
-            "authorization code has already been used".to_string(),
         ));
     }
     if code.expires_at < chrono::Utc::now() {
@@ -600,7 +602,7 @@ mod tests {
     use super::{
         bearer_token, build_redirect, consent_satisfies_request, validate_authorization_request,
         validate_token_request, verify_pkce, AuthorizationRequest, CreateOAuthClientRequest,
-        TokenRequest,
+        PendingAuthorizationRequest, TokenRequest, PENDING_AUTHORIZATION,
     };
     use crate::auth::IDENTITY;
     use crate::config::EmailConfig;
@@ -745,7 +747,6 @@ mod tests {
             nonce: Some("nonce-123".to_string()),
             code_challenge,
             expires_at: Utc::now() + Duration::minutes(5),
-            used_at: None,
             id: RecordId::new("authorization_code", "code-123"),
         }
     }
@@ -791,16 +792,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_token_request_rejects_reused_code() {
-        let request = token_request();
-        let mut code = authorization_code("challenge".to_string());
-        code.used_at = Some(Utc::now());
-
-        let err = validate_token_request(&request, &code).unwrap_err();
-        assert!(matches!(err, IdentityError::BadRequest(_)));
-    }
-
-    #[test]
     fn validate_token_request_rejects_expired_code() {
         let request = token_request();
         let mut code = authorization_code("challenge".to_string());
@@ -833,9 +824,24 @@ mod tests {
         Ok(StatusCode::NO_CONTENT)
     }
 
+    async fn test_pending_authorization(
+        session: Session,
+    ) -> Result<axum::Json<bool>, IdentityError> {
+        Ok(axum::Json(
+            session
+                .get::<PendingAuthorizationRequest>(PENDING_AUTHORIZATION)
+                .await?
+                .is_some(),
+        ))
+    }
+
     fn test_app(state: AppState, db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Router {
         Router::new()
             .route("/test-login", get(test_login))
+            .route(
+                "/test-pending-authorization",
+                get(test_pending_authorization),
+            )
             .merge(crate::oauth::oauth_routes())
             .layer(crate::make_session_layer(db))
             .with_state(state)
@@ -1012,6 +1018,213 @@ mod tests {
             userinfo_json["email"],
             Value::String("alice@example.com".to_string())
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn authorize_without_consent_does_not_store_pending_authorization() -> anyhow::Result<()>
+    {
+        let db = mem_db().await?;
+        let persistence = Arc::new(PersistenceService::new(db.clone()));
+        let user_id = persistence
+            .persist_identity(Identity {
+                email: "alice@example.com".to_string(),
+                ..admin_identity()
+            })
+            .await?;
+        let mut alice = persistence.fetch_identity(&user_id).await?.unwrap();
+        alice.admin = false;
+        persistence.update_identity(&alice).await?;
+        persistence
+            .create_oauth_client(
+                "client-1",
+                "Example client",
+                vec!["http://localhost:4000/callback".to_string()],
+            )
+            .await?;
+        persistence
+            .grant_consent(
+                &user_id,
+                "client-1",
+                vec!["openid".to_string(), "email".to_string()],
+                Utc::now(),
+            )
+            .await?;
+
+        let state = AppState {
+            ps: persistence.clone(),
+            is: Arc::new(InviteService::new(
+                persistence,
+                &EmailConfig {
+                    relay_host: "localhost".to_string(),
+                    username: None,
+                    password_file: None,
+                    sender_email: "test@example.com".to_string(),
+                },
+                "http://localhost:8080",
+            )?),
+            templates: Arc::new(Templates::new()?),
+            oidc: Arc::new(OidcService::new("http://localhost:8080")?),
+            rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+        };
+        let app = test_app(state, db);
+
+        let login = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/test-login?user_id={user_id}"))
+                    .body(Body::empty())?,
+            )
+            .await?;
+        let cookie = session_cookie(&login);
+
+        let verifier = "verifier-123";
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let authorize = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&scope=openid%20email&state=state-123&nonce=nonce-123&code_challenge={challenge}&code_challenge_method=S256"
+                    ))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(authorize.status(), StatusCode::SEE_OTHER);
+
+        let pending = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/test-pending-authorization")
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(pending.status(), StatusCode::OK);
+        let pending_json: bool = serde_json::from_slice(&response_body(pending).await)?;
+        assert!(!pending_json);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn authorization_code_cannot_be_reused_after_token_exchange() -> anyhow::Result<()> {
+        let db = mem_db().await?;
+        let persistence = Arc::new(PersistenceService::new(db.clone()));
+        let user_id = persistence
+            .persist_identity(Identity {
+                email: "alice@example.com".to_string(),
+                ..admin_identity()
+            })
+            .await?;
+        let mut alice = persistence.fetch_identity(&user_id).await?.unwrap();
+        alice.admin = false;
+        persistence.update_identity(&alice).await?;
+        persistence
+            .create_oauth_client(
+                "client-1",
+                "Example client",
+                vec!["http://localhost:4000/callback".to_string()],
+            )
+            .await?;
+
+        let state = AppState {
+            ps: persistence.clone(),
+            is: Arc::new(InviteService::new(
+                persistence,
+                &EmailConfig {
+                    relay_host: "localhost".to_string(),
+                    username: None,
+                    password_file: None,
+                    sender_email: "test@example.com".to_string(),
+                },
+                "http://localhost:8080",
+            )?),
+            templates: Arc::new(Templates::new()?),
+            oidc: Arc::new(OidcService::new("http://localhost:8080")?),
+            rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+        };
+        let app = test_app(state, db);
+
+        let login = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/test-login?user_id={user_id}"))
+                    .body(Body::empty())?,
+            )
+            .await?;
+        let cookie = session_cookie(&login);
+
+        let verifier = "verifier-123";
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let authorize = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&scope=openid%20email&state=state-123&nonce=nonce-123&code_challenge={challenge}&code_challenge_method=S256"
+                    ))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(authorize.status(), StatusCode::OK);
+
+        let consent = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/authorize/consent")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("decision=approve"))?,
+            )
+            .await?;
+        assert_eq!(consent.status(), StatusCode::SEE_OTHER);
+        let location = consent
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()?
+            .to_string();
+        let redirect = Url::parse(&location)?;
+        let query: std::collections::HashMap<String, String> =
+            redirect.query_pairs().into_owned().collect();
+        let code = query.get("code").unwrap().to_string();
+
+        let form = format!(
+            "grant_type=authorization_code&code={code}&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&client_id=client-1&code_verifier={verifier}"
+        );
+        let first_token = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(form.clone()))?,
+            )
+            .await?;
+        assert_eq!(first_token.status(), StatusCode::OK);
+
+        let second_token = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(form))?,
+            )
+            .await?;
+        assert_eq!(second_token.status(), StatusCode::BAD_REQUEST);
+        let error = String::from_utf8(response_body(second_token).await)?;
+        assert!(error.contains("Unknown authorization code"));
 
         Ok(())
     }
