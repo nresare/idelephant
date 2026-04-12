@@ -13,6 +13,7 @@ from image_version import version
 def pipeline(tag: str, should_publish: bool = False) -> dict[str, Any]:
     rust_test = {
         "label": ":rust: rust build and test",
+        "key": "rust_test",
         "commands": [
             "cargo fmt --check",
             "cargo clippy --workspace --locked",
