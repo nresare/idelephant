@@ -54,7 +54,6 @@ struct NewAuthorizationCode {
     nonce: Option<String>,
     code_challenge: String,
     expires_at: DateTime<Utc>,
-    used_at: Option<DateTime<Utc>>,
 }
 
 pub struct CreateAuthorizationCode {
@@ -118,7 +117,6 @@ pub struct AuthorizationCode {
     pub nonce: Option<String>,
     pub code_challenge: String,
     pub expires_at: DateTime<Utc>,
-    pub used_at: Option<DateTime<Utc>>,
     pub id: RecordId,
 }
 
@@ -277,7 +275,6 @@ impl PersistenceService {
                 nonce: code.nonce,
                 code_challenge: code.code_challenge,
                 expires_at: code.expires_at,
-                used_at: None,
             })
             .await?
             .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
@@ -296,30 +293,11 @@ impl PersistenceService {
         Ok(result.take(0)?)
     }
 
-    pub async fn mark_authorization_code_used(
-        &self,
-        code: &str,
-        used_at: DateTime<Utc>,
-    ) -> Result<bool, IdentityError> {
-        let Some(mut authorization_code) = self.fetch_authorization_code(code).await? else {
+    pub async fn delete_authorization_code(&self, code: &str) -> Result<bool, IdentityError> {
+        let Some(authorization_code) = self.fetch_authorization_code(code).await? else {
             return Ok(false);
         };
-        authorization_code.used_at = Some(used_at);
-        let result: Option<AuthorizationCode> = self
-            .db
-            .update(authorization_code.id.clone())
-            .content(NewAuthorizationCode {
-                code: authorization_code.code,
-                client_id: authorization_code.client_id,
-                subject_id: authorization_code.subject_id,
-                redirect_uri: authorization_code.redirect_uri,
-                scopes: authorization_code.scopes,
-                nonce: authorization_code.nonce,
-                code_challenge: authorization_code.code_challenge,
-                expires_at: authorization_code.expires_at,
-                used_at: authorization_code.used_at,
-            })
-            .await?;
+        let result: Option<AuthorizationCode> = self.db.delete(authorization_code.id).await?;
         Ok(result.is_some())
     }
 
@@ -648,15 +626,9 @@ mod tests {
         assert_eq!(fetched.nonce, nonce);
         assert_eq!(fetched.code_challenge, "challenge");
         assert_eq!(fetched.expires_at, expires_at);
-        assert!(fetched.used_at.is_none());
 
-        let used_at = Utc::now();
-        assert!(
-            ps.mark_authorization_code_used("code-hash", used_at)
-                .await?
-        );
-        let fetched = ps.fetch_authorization_code("code-hash").await?.unwrap();
-        assert_eq!(fetched.used_at, Some(used_at));
+        assert!(ps.delete_authorization_code("code-hash").await?);
+        assert!(ps.fetch_authorization_code("code-hash").await?.is_none());
         Ok(())
     }
 
