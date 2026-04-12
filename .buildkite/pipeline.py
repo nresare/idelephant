@@ -10,7 +10,6 @@ from typing import Any
 from image_version import version
 
 def pipeline(tag: str, should_publish: bool=False) -> dict[str, Any]:
-    repo = "packages.buildkite.com/nresare/idelephant/idelephant"
     rust_test = {
         "label": ":rust: rust build and test",
         "commands": [
@@ -21,7 +20,8 @@ def pipeline(tag: str, should_publish: bool=False) -> dict[str, Any]:
     }
     docker = {
                 "label": ":whale: build docker image",
-                "command": f"docker buildx build -t {repo}:{tag} .",
+                "command": f"docker buildx build -t idelephant:{tag} .",
+                "agents": {"arch": "arm64"},
             }
     if should_publish:
         docker["plugins"] = [
