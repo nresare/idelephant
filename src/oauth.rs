@@ -228,7 +228,7 @@ async fn authorize_consent(
     let code = Token::random().base64();
     persistence_service
         .create_authorization_code(CreateAuthorizationCode {
-            code_hash: code.clone(),
+            code: code.clone(),
             client_id: pending.client_id.clone(),
             subject_id: identity.id()?,
             redirect_uri: pending.redirect_uri.clone(),
@@ -380,7 +380,7 @@ async fn continue_authorization(
         let code = Token::random().base64();
         persistence_service
             .create_authorization_code(CreateAuthorizationCode {
-                code_hash: code.clone(),
+                code: code.clone(),
                 client_id: pending.client_id.clone(),
                 subject_id: identity.id()?,
                 redirect_uri: pending.redirect_uri.clone(),
@@ -737,7 +737,7 @@ mod tests {
 
     fn authorization_code(code_challenge: String) -> AuthorizationCode {
         AuthorizationCode {
-            code_hash: "code-123".to_string(),
+            code: "code-123".to_string(),
             client_id: "client-1".to_string(),
             subject_id: "identity:alice".to_string(),
             redirect_uri: "http://localhost:4000/callback".to_string(),
