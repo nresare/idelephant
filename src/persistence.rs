@@ -1,6 +1,7 @@
 use crate::config::PersistenceConfig;
 use crate::error::IdentityError;
 use crate::error::IdentityError::Logic;
+use crate::idmouse::IdmouseClient;
 use crate::util::Token;
 use crate::AppState;
 use axum::extract::FromRef;
@@ -11,6 +12,9 @@ use surrealdb::engine::any;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, RecordIdKey, SurrealValue};
 use surrealdb::Surreal;
+
+const NAMESPACE: &str = "default";
+const DATABASE: &str = "idelephant";
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct Identity {
@@ -186,13 +190,20 @@ fn is_duplicate_jwk_slot_error(err: &surrealdb::Error) -> bool {
 
 pub async fn make_db(config: &PersistenceConfig) -> Result<Surreal<Any>, IdentityError> {
     let db: Surreal<Any> = any::connect(&config.uri).await?;
-    db.signin(surrealdb::opt::auth::Database {
-        namespace: "default".to_string(),
-        database: "idelephant".to_string(),
-        username: config.username.clone(),
-        password: config.password()?,
-    })
-    .await?;
+    if let Some(idmouse_config) = config.idmouse.clone() {
+        let access_token = IdmouseClient::new(idmouse_config)
+            .fetch_access_token()
+            .await?;
+        db.authenticate(access_token).await?;
+    } else {
+        db.signin(surrealdb::opt::auth::Database {
+            namespace: NAMESPACE.to_string(),
+            database: DATABASE.to_string(),
+            username: config.username()?,
+            password: config.password()?,
+        })
+        .await?;
+    }
     setup_db(&db).await?;
     Ok(db)
 }
@@ -205,7 +216,7 @@ pub async fn mem_db() -> Result<Surreal<Any>, IdentityError> {
 }
 
 async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
-    db.use_ns("default").use_db("idelephant").await?;
+    db.use_ns(NAMESPACE).use_db(DATABASE).await?;
     db.query(
         "DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE;
          DEFINE INDEX IF NOT EXISTS inviteToken ON identity FIELDS state.Invited.token UNIQUE;

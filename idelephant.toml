@@ -12,3 +12,8 @@ relay_host = "mail.resare.com"
 uri = "ws://localhost:8000/"
 username = "idelephant"
 password_file = "/tmp/password"
+
+# Alternative auth via idmouse:
+#[persistence.idmouse]
+#url = "http://localhost:9000/token"
+#bearer_token_file = "/tmp/idmouse-bearer-token"

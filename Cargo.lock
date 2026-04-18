@@ -2292,6 +2292,7 @@ dependencies = [
  "mime_guess",
  "p256",
  "rand 0.10.1",
+ "reqwest",
  "rust-embed",
  "serde",
  "serde_json",

@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod embed;
 mod error;
+mod idmouse;
 mod invite;
 mod oauth;
 mod oidc;
@@ -78,7 +79,7 @@ enum Fatal {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(EnvFilter::new(
-            "idelephant=info,tower_http=info,axum::rejection=trace",
+            "idelephant=info,tower_http=info,axum::rejection=debug",
         ))
         .with(tracing_subscriber::fmt::layer().compact())
         .init();
