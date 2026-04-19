@@ -77,10 +77,12 @@ enum Fatal {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("idelephant=debug,tower_http=info,axum::rejection=debug")
+    });
+
     tracing_subscriber::registry()
-        .with(EnvFilter::new(
-            "idelephant=info,tower_http=info,axum::rejection=debug",
-        ))
+        .with(env_filter)
         .with(tracing_subscriber::fmt::layer().compact())
         .init();
     match run().await {
