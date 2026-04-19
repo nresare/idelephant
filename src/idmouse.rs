@@ -1,6 +1,9 @@
 use crate::config::IdmouseConfig;
 use anyhow::{anyhow, Context};
+use base64::Engine;
 use serde::Deserialize;
+use serde_json::Value;
+use tracing::debug;
 
 #[derive(Clone)]
 pub struct IdmouseClient {
@@ -27,6 +30,8 @@ impl IdmouseClient {
             .bearer_token()
             .context("Failed to read idmouse bearer token")?;
 
+        debug!(url = %self.config.url, "Requesting SurrealDB access token from idmouse");
+
         let response = self
             .client
             .post(&self.config.url)
@@ -46,13 +51,38 @@ impl IdmouseClient {
             return Err(anyhow!("idmouse returned an empty access_token"));
         }
 
+        debug!(
+            access_token_len = token.access_token.len(),
+            "Received SurrealDB access token from idmouse"
+        );
+
         Ok(token.access_token)
     }
 }
 
+pub fn jwt_claims(token: &str) -> anyhow::Result<Value> {
+    let mut parts = token.split('.');
+    let _header = parts
+        .next()
+        .ok_or_else(|| anyhow!("JWT is missing a header segment"))?;
+    let claims = parts
+        .next()
+        .ok_or_else(|| anyhow!("JWT is missing a claims segment"))?;
+
+    if parts.next().is_none() {
+        return Err(anyhow!("JWT is missing a signature segment"));
+    }
+
+    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(claims)
+        .context("Failed to base64url decode JWT claims")?;
+
+    serde_json::from_slice(&claims).context("Failed to parse JWT claims as JSON")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::IdmouseClient;
+    use super::{jwt_claims, IdmouseClient};
     use crate::config::IdmouseConfig;
     use axum::extract::State;
     use axum::http::header::AUTHORIZATION;
@@ -115,6 +145,18 @@ mod tests {
         assert_eq!(token, "surreal-jwt-token");
 
         server.abort();
+        Ok(())
+    }
+
+    #[test]
+    fn jwt_claims_decodes_middle_segment() -> anyhow::Result<()> {
+        let token = "eyJhbGciOiJub25lIn0.eyJucyI6ImRlZmF1bHQiLCJkYiI6ImlkZWxlcGhhbnQiLCJhYyI6InNlcnZpY2UifQ.signature";
+        let claims = jwt_claims(token)?;
+
+        assert_eq!(claims["ns"], "default");
+        assert_eq!(claims["db"], "idelephant");
+        assert_eq!(claims["ac"], "service");
+
         Ok(())
     }
 
