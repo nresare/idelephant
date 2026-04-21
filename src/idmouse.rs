@@ -1,9 +1,20 @@
 use crate::config::IdmouseConfig;
+use crate::later::{Do, LaterService};
 use anyhow::{anyhow, Context};
 use base64::Engine;
 use serde::Deserialize;
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
+use surrealdb::engine::any::Any;
+use surrealdb::Surreal;
 use tracing::debug;
+use tracing::{info, warn};
+
+const RENEW_MARGIN: Duration = Duration::from_secs(10);
+const INITIAL_RENEW_RETRY_DELAY: Duration = Duration::from_secs(1);
+const MAX_RETRIES: usize = 5;
 
 #[derive(Clone)]
 pub struct IdmouseClient {
@@ -14,6 +25,13 @@ pub struct IdmouseClient {
 #[derive(Deserialize)]
 struct IdmouseTokenResponse {
     access_token: String,
+    expires_in: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdmouseTokenLease {
+    pub access_token: String,
+    pub expires_in: Duration,
 }
 
 impl IdmouseClient {
@@ -24,7 +42,7 @@ impl IdmouseClient {
         }
     }
 
-    pub async fn fetch_access_token(&self) -> anyhow::Result<String> {
+    pub async fn fetch_token_lease(&self) -> anyhow::Result<IdmouseTokenLease> {
         let bearer_token = self
             .config
             .bearer_token()
@@ -56,7 +74,130 @@ impl IdmouseClient {
             "Received SurrealDB access token from idmouse"
         );
 
-        Ok(token.access_token)
+        if token.expires_in == 0 {
+            return Err(anyhow!("idmouse returned an invalid expires_in of 0"));
+        }
+
+        Ok(IdmouseTokenLease {
+            access_token: token.access_token,
+            expires_in: Duration::from_secs(token.expires_in),
+        })
+    }
+
+    pub async fn authenticate_db(
+        &self,
+        db: &Surreal<Any>,
+        later: LaterService,
+    ) -> anyhow::Result<()> {
+        let lease = self.fetch_token_lease().await?;
+        match jwt_claims(&lease.access_token) {
+            Ok(claims) => debug!(claims = %claims, "Authenticating to SurrealDB with idmouse JWT"),
+            Err(error) => debug!(?error, "Failed to decode idmouse JWT claims"),
+        }
+        db.authenticate(&lease.access_token).await?;
+        later.later(
+            RenewAuthentication::new(later.clone(), db.clone(), self.clone(), 0),
+            renewal_delay(lease.expires_in),
+        );
+        Ok(())
+    }
+}
+
+fn renewal_delay(expires_in: Duration) -> Duration {
+    expires_in.saturating_sub(RENEW_MARGIN)
+}
+
+fn retry_delay(retry: usize) -> Duration {
+    INITIAL_RENEW_RETRY_DELAY.saturating_mul(1u32 << retry)
+}
+
+struct RenewAuthentication {
+    later: LaterService,
+    db: Surreal<Any>,
+    client: IdmouseClient,
+    retry: usize,
+}
+
+impl RenewAuthentication {
+    fn new(later: LaterService, db: Surreal<Any>, client: IdmouseClient, retry: usize) -> Self {
+        Self {
+            later,
+            db,
+            client,
+            retry,
+        }
+    }
+
+    async fn execute(self) {
+        match self.try_renew().await {
+            Ok(next_lease) => {
+                info!("Renewed SurrealDB authentication from idmouse");
+                self.later.later(
+                    RenewAuthentication::new(
+                        self.later.clone(),
+                        self.db.clone(),
+                        self.client.clone(),
+                        0,
+                    ),
+                    renewal_delay(next_lease.expires_in),
+                );
+            }
+            Err((error, message)) => self.retry_later_or_stop(error, message),
+        }
+    }
+
+    async fn try_renew(&self) -> Result<IdmouseTokenLease, (String, &'static str)> {
+        let next_lease = self
+            .client
+            .fetch_token_lease()
+            .await
+            .map_err(|error| (error.to_string(), "Failed to fetch renewed idmouse token"))?;
+        self.db
+            .authenticate(next_lease.access_token.clone())
+            .await
+            .map_err(|error| {
+                (
+                    error.to_string(),
+                    "Failed to renew SurrealDB authentication",
+                )
+            })?;
+        Ok(next_lease)
+    }
+
+    fn retry_later_or_stop(self, error: String, message: &'static str) {
+        if self.retry >= MAX_RETRIES {
+            warn!(
+                error = %error,
+                max_retries = MAX_RETRIES,
+                "{message}; giving up"
+            );
+            return;
+        }
+
+        let next_retry = self.retry + 1;
+        warn!(
+            error = %error,
+            retry = next_retry,
+            max_retries = MAX_RETRIES,
+            "{message}; rescheduling with exponential backoff"
+        );
+        self.later.later(
+            RenewAuthentication::new(
+                self.later.clone(),
+                self.db.clone(),
+                self.client.clone(),
+                next_retry,
+            ),
+            retry_delay(self.retry),
+        );
+    }
+}
+
+impl Do for RenewAuthentication {
+    fn run(self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(async move {
+            self.execute().await;
+        })
     }
 }
 
@@ -82,7 +223,7 @@ pub fn jwt_claims(token: &str) -> anyhow::Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{jwt_claims, IdmouseClient};
+    use super::{jwt_claims, renewal_delay, retry_delay, IdmouseClient, IdmouseTokenLease};
     use crate::config::IdmouseConfig;
     use axum::extract::State;
     use axum::http::header::AUTHORIZATION;
@@ -93,6 +234,7 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::Duration;
 
     #[derive(Clone)]
     struct TestState {
@@ -100,7 +242,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_access_token_reads_local_bearer_token_and_posts_to_idmouse() -> anyhow::Result<()>
+    async fn fetch_token_lease_reads_local_bearer_token_and_posts_to_idmouse() -> anyhow::Result<()>
     {
         let token_file = write_temp_token_file("local-bearer-token\n")?;
         let state = TestState {
@@ -125,7 +267,10 @@ mod tests {
 
             (
                 StatusCode::OK,
-                Json(json!({ "access_token": "surreal-jwt-token" })),
+                Json(json!({
+                    "access_token": "surreal-jwt-token",
+                    "expires_in": 42
+                })),
             )
         }
 
@@ -138,11 +283,17 @@ mod tests {
 
         let client = IdmouseClient::new(IdmouseConfig {
             url: format!("http://{address}/"),
-            bearer_token_file: token_file.into_boxed_path(),
+            token_path: token_file.into_boxed_path(),
         });
 
-        let token = client.fetch_access_token().await?;
-        assert_eq!(token, "surreal-jwt-token");
+        let token = client.fetch_token_lease().await?;
+        assert_eq!(
+            token,
+            IdmouseTokenLease {
+                access_token: "surreal-jwt-token".to_string(),
+                expires_in: std::time::Duration::from_secs(42),
+            }
+        );
 
         server.abort();
         Ok(())
@@ -158,6 +309,29 @@ mod tests {
         assert_eq!(claims["ac"], "service");
 
         Ok(())
+    }
+
+    #[test]
+    fn renewal_delay_renews_ten_seconds_before_expiry() {
+        assert_eq!(
+            renewal_delay(Duration::from_secs(45)),
+            Duration::from_secs(35)
+        );
+    }
+
+    #[test]
+    fn renewal_delay_is_immediate_when_expiry_is_within_margin() {
+        assert_eq!(renewal_delay(Duration::from_secs(10)), Duration::ZERO);
+        assert_eq!(renewal_delay(Duration::from_secs(3)), Duration::ZERO);
+    }
+
+    #[test]
+    fn retry_delay_uses_exponential_backoff_from_one_second() {
+        assert_eq!(retry_delay(0), Duration::from_secs(1));
+        assert_eq!(retry_delay(1), Duration::from_secs(2));
+        assert_eq!(retry_delay(2), Duration::from_secs(4));
+        assert_eq!(retry_delay(3), Duration::from_secs(8));
+        assert_eq!(retry_delay(4), Duration::from_secs(16));
     }
 
     fn write_temp_token_file(contents: &str) -> anyhow::Result<PathBuf> {

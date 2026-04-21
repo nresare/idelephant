@@ -4,6 +4,7 @@ mod embed;
 mod error;
 mod idmouse;
 mod invite;
+mod later;
 mod oauth;
 mod oidc;
 mod persistence;
@@ -16,6 +17,7 @@ use crate::auth::{auth_routes, IDENTITY};
 use crate::config::Config;
 use crate::error::IdentityError;
 use crate::invite::{invite_routes, InviteService};
+use crate::later::LaterService;
 use crate::oauth::{oauth_routes, PENDING_AUTHORIZATION};
 use crate::oidc::OidcService;
 use crate::persistence::{make_db, Identity, PersistenceService};
@@ -111,7 +113,8 @@ async fn run() -> Result<(), Fatal> {
     let config: Config =
         toml::from_str(&config).map_err(|e| Fatal::ReadConfigFile(cli.config_path, e.into()))?;
 
-    let db = make_db(&config.persistence)
+    let later = LaterService::new();
+    let db = make_db(&config.persistence, later)
         .await
         .map_err(|e| Fatal::DbSetup(e.into()))?;
 

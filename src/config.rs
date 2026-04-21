@@ -22,7 +22,7 @@ pub struct PersistenceConfig {
 #[derive(Clone, Deserialize)]
 pub struct IdmouseConfig {
     pub url: String,
-    pub(crate) bearer_token_file: Box<Path>,
+    pub token_path: Box<Path>,
 }
 
 #[derive(Deserialize)]
@@ -63,7 +63,7 @@ impl PersistenceConfig {
 
 impl IdmouseConfig {
     pub fn bearer_token(&self) -> Result<String, Error> {
-        read_secret_file(&self.bearer_token_file)
+        read_secret_file(&self.token_path)
     }
 }
 
