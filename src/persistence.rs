@@ -2,6 +2,7 @@ use crate::config::PersistenceConfig;
 use crate::error::IdentityError;
 use crate::error::IdentityError::Logic;
 use crate::idmouse::IdmouseClient;
+use crate::later::LaterService;
 use crate::util::Token;
 use crate::AppState;
 use axum::extract::FromRef;
@@ -12,7 +13,6 @@ use surrealdb::engine::any;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, RecordIdKey, SurrealValue};
 use surrealdb::Surreal;
-use tracing::debug;
 
 const NAMESPACE: &str = "default";
 const DATABASE: &str = "idelephant";
@@ -189,17 +189,15 @@ fn is_duplicate_jwk_slot_error(err: &surrealdb::Error) -> bool {
         .contains("Database index `jwkKeyActiveFrom` already contains")
 }
 
-pub async fn make_db(config: &PersistenceConfig) -> Result<Surreal<Any>, IdentityError> {
+pub async fn make_db(
+    config: &PersistenceConfig,
+    later: LaterService,
+) -> Result<Surreal<Any>, IdentityError> {
     let db: Surreal<Any> = any::connect(&config.uri).await?;
     if let Some(idmouse_config) = config.idmouse.clone() {
-        let access_token = IdmouseClient::new(idmouse_config)
-            .fetch_access_token()
+        IdmouseClient::new(idmouse_config)
+            .authenticate_db(&db, later)
             .await?;
-        match crate::idmouse::jwt_claims(&access_token) {
-            Ok(claims) => debug!(claims = %claims, "Authenticating to SurrealDB with idmouse JWT"),
-            Err(error) => debug!(?error, "Failed to decode idmouse JWT claims"),
-        }
-        db.authenticate(access_token).await?;
     } else {
         db.signin(surrealdb::opt::auth::Database {
             namespace: NAMESPACE.to_string(),
