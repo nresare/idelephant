@@ -152,6 +152,10 @@ impl RenewAuthentication {
             .fetch_token_lease()
             .await
             .map_err(|error| (error.to_string(), "Failed to fetch renewed idmouse token"))?;
+        match jwt_claims(&next_lease.access_token) {
+            Ok(claims) => debug!(claims = %claims, "Authenticating to SurrealDB with idmouse JWT"),
+            Err(error) => debug!(?error, "Failed to decode idmouse JWT claims"),
+        }
         self.db
             .authenticate(next_lease.access_token.clone())
             .await

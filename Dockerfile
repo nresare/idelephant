@@ -12,6 +12,8 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder 
 COPY --from=planner /build/recipe.json recipe.json
 # Build dependencies - this is the caching Docker layer!
+# workaround for bug where cargo chef doesn't pick up rust-toolchain.toml on cook subcommand
+COPY rust-toolchain.toml .
 RUN cargo chef cook --release --recipe-path recipe.json
 # Build application
 COPY . .
