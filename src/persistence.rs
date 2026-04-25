@@ -9,6 +9,7 @@ use axum::extract::FromRef;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
+use std::sync::Arc;
 use surrealdb::engine::any;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, RecordIdKey, SurrealValue};
@@ -165,7 +166,7 @@ struct NewJwkKey {
 
 #[derive(Clone)]
 pub struct PersistenceService {
-    db: Surreal<Any>,
+    db: Arc<Surreal<Any>>,
 }
 
 fn record_id_key_to_string(key: &RecordIdKey) -> Result<String, IdentityError> {
@@ -192,11 +193,11 @@ fn is_duplicate_jwk_slot_error(err: &surrealdb::Error) -> bool {
 pub async fn make_db(
     config: &PersistenceConfig,
     later: LaterService,
-) -> Result<Surreal<Any>, IdentityError> {
-    let db: Surreal<Any> = any::connect(&config.uri).await?;
+) -> Result<Arc<Surreal<Any>>, IdentityError> {
+    let db = Arc::new(any::connect(&config.uri).await?);
     if let Some(idmouse_config) = config.idmouse.clone() {
         IdmouseClient::new(idmouse_config)
-            .authenticate_db(&db, later)
+            .authenticate_db(db.clone(), later)
             .await?;
     } else {
         db.signin(surrealdb::opt::auth::Database {
@@ -207,14 +208,14 @@ pub async fn make_db(
         })
         .await?;
     }
-    setup_db(&db).await?;
+    setup_db(db.as_ref()).await?;
     Ok(db)
 }
 
 #[cfg(test)]
-pub async fn mem_db() -> Result<Surreal<Any>, IdentityError> {
-    let db = any::connect("mem://").await?;
-    setup_db(&db).await?;
+pub async fn mem_db() -> Result<Arc<Surreal<Any>>, IdentityError> {
+    let db = Arc::new(any::connect("mem://").await?);
+    setup_db(db.as_ref()).await?;
     Ok(db)
 }
 
@@ -237,7 +238,7 @@ async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
 }
 
 impl PersistenceService {
-    pub fn new(db: Surreal<Any>) -> Self {
+    pub fn new(db: Arc<Surreal<Any>>) -> Self {
         PersistenceService { db }
     }
 
