@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
@@ -86,7 +87,7 @@ impl IdmouseClient {
 
     pub async fn authenticate_db(
         &self,
-        db: &Surreal<Any>,
+        db: Arc<Surreal<Any>>,
         later: LaterService,
     ) -> anyhow::Result<()> {
         let lease = self.fetch_token_lease().await?;
@@ -96,7 +97,7 @@ impl IdmouseClient {
         }
         db.authenticate(&lease.access_token).await?;
         later.later(
-            RenewAuthentication::new(later.clone(), db.clone(), self.clone(), 0),
+            RenewAuthentication::new(later.clone(), db, self.clone(), 0),
             renewal_delay(lease.expires_in),
         );
         Ok(())
@@ -113,13 +114,18 @@ fn retry_delay(retry: usize) -> Duration {
 
 struct RenewAuthentication {
     later: LaterService,
-    db: Surreal<Any>,
+    db: Arc<Surreal<Any>>,
     client: IdmouseClient,
     retry: usize,
 }
 
 impl RenewAuthentication {
-    fn new(later: LaterService, db: Surreal<Any>, client: IdmouseClient, retry: usize) -> Self {
+    fn new(
+        later: LaterService,
+        db: Arc<Surreal<Any>>,
+        client: IdmouseClient,
+        retry: usize,
+    ) -> Self {
         Self {
             later,
             db,

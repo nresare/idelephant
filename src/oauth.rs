@@ -841,7 +841,10 @@ mod tests {
         ))
     }
 
-    fn test_app(state: AppState, db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Router {
+    fn test_app(
+        state: AppState,
+        db: std::sync::Arc<surrealdb::Surreal<surrealdb::engine::any::Any>>,
+    ) -> Router {
         Router::new()
             .route("/test-login", get(test_login))
             .route(
@@ -849,7 +852,7 @@ mod tests {
                 get(test_pending_authorization),
             )
             .merge(crate::oauth::oauth_routes())
-            .layer(crate::make_session_layer(db))
+            .layer(crate::make_session_layer(db.clone()))
             .with_state(state)
     }
 

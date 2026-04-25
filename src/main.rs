@@ -118,7 +118,8 @@ async fn run() -> Result<(), Fatal> {
         .await
         .map_err(|e| Fatal::DbSetup(e.into()))?;
 
-    let state = build_app_state(&config, &db).await?;
+    let session_layer = make_session_layer(db.clone());
+    let state = build_app_state(&config, db).await?;
 
     let app = Router::new()
         .route("/", get(index_handler))
@@ -129,7 +130,7 @@ async fn run() -> Result<(), Fatal> {
         .merge(invite_routes())
         .merge(oauth_routes())
         .fallback_service(get(not_found))
-        .layer(make_session_layer(db))
+        .layer(session_layer)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
@@ -147,8 +148,8 @@ async fn run() -> Result<(), Fatal> {
     Ok(())
 }
 
-async fn build_app_state(config: &Config, db: &Surreal<Any>) -> Result<AppState, Fatal> {
-    let ps = Arc::new(PersistenceService::new(db.clone()));
+async fn build_app_state(config: &Config, db: Arc<Surreal<Any>>) -> Result<AppState, Fatal> {
+    let ps = Arc::new(PersistenceService::new(db));
     let rs = Arc::new(
         RegistrationService::new(&config.origin)
             .map_err(|e| Fatal::ReadConfigFile("Failed to parse origin".to_string(), e.into()))?,
@@ -178,7 +179,7 @@ async fn build_app_state(config: &Config, db: &Surreal<Any>) -> Result<AppState,
     Ok(state)
 }
 
-fn make_session_layer(db: Surreal<Any>) -> SessionManagerLayer<SurrealSessionStore<Any>> {
+fn make_session_layer(db: Arc<Surreal<Any>>) -> SessionManagerLayer<SurrealSessionStore<Any>> {
     let session_store = SurrealSessionStore::new(db, "sessions".to_string());
     SessionManagerLayer::new(session_store)
         .with_expiry(Expiry::OnInactivity(Duration::hours(1)))
