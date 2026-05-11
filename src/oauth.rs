@@ -968,7 +968,7 @@ mod tests {
         assert_eq!(authorize.status(), StatusCode::OK);
         let authorize_body = String::from_utf8(response_body(authorize).await)?;
         assert!(authorize_body
-            .contains("The website Example client is attempting to use this service for logins."));
+            .contains("Example client</strong> wants to use this service for logins."));
 
         let consent = app
             .clone()

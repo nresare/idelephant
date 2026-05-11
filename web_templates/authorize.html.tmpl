@@ -1,25 +1,32 @@
+<!DOCTYPE html>
 <html lang="en">
-    <head>
-        <title>Consent to Login</title>
-        <link rel="stylesheet" href="/static/index.css"/>
-    </head>
-    <body>
-        <main class="main">
-            <section>
-                <h1>Consent to Login</h1>
-                <p>The website {{client_name}} is attempting to use this service for logins.</p>
-                {{#if requests_email}}
-                <p>As part of the login process, it is requesting your email address.</p>
-                <p>Do you consent to sharing your email address, as stored on {{idp_basename}}, with the site {{client_name}}?</p>
-                {{else}}
-                <p>Do you consent to continuing the login process using your account on {{idp_basename}}?</p>
-                {{/if}}
-                <p>You are currently signed in as {{identity_email}}.</p>
-                <form action="/authorize/consent" method="post">
-                    <p><button type="submit" name="decision" value="approve">Yes, continue</button></p>
-                    <p><button type="submit" name="decision" value="deny">No, cancel</button></p>
-                </form>
-            </section>
-        </main>
-    </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Consent to Login</title>
+<link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+<main>
+<section class="hero">
+<p class="eyebrow">Authorization request</p>
+<h1>Consent to login</h1>
+<p class="lede"><strong>{{client_name}}</strong> wants to use this service for logins.</p>
+</section>
+<section class="panel" aria-labelledby="consent-title">
+<h2 id="consent-title">Review request</h2>
+{{#if requests_email}}
+<p>As part of the login process, it is requesting your email address.</p>
+<p>Do you consent to sharing your email address, as stored on {{idp_basename}}, with the site {{client_name}}?</p>
+{{else}}
+<p>Do you consent to continuing the login process using your account on {{idp_basename}}?</p>
+{{/if}}
+<p class="muted">You are currently signed in as <strong>{{identity_email}}</strong>.</p>
+<form class="button-group" action="/authorize/consent" method="post">
+<button type="submit" name="decision" value="approve">Yes, continue</button>
+<button class="secondary" type="submit" name="decision" value="deny">No, cancel</button>
+</form>
+</section>
+</main>
+</body>
 </html>

@@ -1,19 +1,27 @@
+<!DOCTYPE html>
 <html lang="en">
-    <head>
-        <title>idElephant accept page</title>
-        <link rel="stylesheet" href="/static/index.css"/>
-    </head>
-    <body>
-        <main class="main">
-            <section>
-                <h1>Email address confirmed</h1>
-                <p>Thank you for confirming your access to the email address {{email}}</p>
-                <input id="register" type="submit" value="Register passkey"/>
-            </section>
-        </main>
-        <script src="/static/script.js"></script>
-        <script>
-        document.getElementById("register").addEventListener("click", register)
-        </script>
-    </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>idElephant accept page</title>
+<link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+<main>
+<section class="hero">
+<p class="eyebrow">Passkey registration</p>
+<h1>Email address confirmed</h1>
+<p class="lede">Thank you for confirming access to <strong>{{email}}</strong>.</p>
+</section>
+<section class="panel" aria-labelledby="register-title">
+<h2 id="register-title">Create your passkey</h2>
+<p class="muted">Your browser will guide you through saving a passkey for future logins.</p>
+<p class="action-row"><input id="register" type="submit" value="Register passkey"></p>
+</section>
+</main>
+<script src="/static/script.js"></script>
+<script>
+document.getElementById("register").addEventListener("click", register)
+</script>
+</body>
 </html>
