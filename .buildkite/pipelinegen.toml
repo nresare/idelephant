@@ -1,1 +1,2 @@
-variant = "rust-container"
+variant = "rust"
+output = "container"
