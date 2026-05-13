@@ -58,7 +58,7 @@ impl RegistrationService {
         credential: &RegisterPublicKeyCredential,
         challenge: &[u8],
     ) -> Result<(), IdentityError> {
-        Ok(credential.validate(challenge, &self.origin, &self.relying_party_id, true)?)
+        Ok(credential.validate(challenge, &self.origin, &self.relying_party_id, false)?)
     }
 }
 
