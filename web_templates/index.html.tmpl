@@ -9,13 +9,13 @@
 <body>
 <main>
 <section class="hero">
-<p class="eyebrow">Passkey identity provider</p>
+<p class="eyebrow">Your favourite identity provider</p>
 {{#if identity}}
 <h1>Welcome back</h1>
 <p class="lede">You are signed in as <strong>{{identity.email}}</strong>.</p>
 {{else}}
-<h1>idElephant</h1>
-<p class="lede">Sign in with a passkey to continue to your identity provider account.</p>
+<h1>idElephant 🐘</h1>
+<p class="lede">If you don't have an account, talk to admin to get invited.</p>
 {{/if}}
 </section>
 
@@ -25,12 +25,10 @@
 <div id="error-message"></div>
 </div>
 
-<h2 id="session-title">{{#if identity}}Current session{{else}}Login{{/if}}</h2>
+<h2 id="session-title">{{#if identity}}Current session{{/if}}</h2>
 {{#if identity}}
-<p class="muted">Use this account for pending authorization requests, or log out to switch identity.</p>
 <p class="action-row"><input id="logout" type="submit" value="log out"></p>
 {{else}}
-<p class="muted">Your browser will ask for the passkey associated with this service.</p>
 <p class="action-row"><input id="authenticate" type="submit" value="log in"></p>
 {{/if}}
 </section>
