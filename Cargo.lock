@@ -4765,8 +4765,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "surrealdb"
 version = "3.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "504a96b55e86ef8653a03b6b97e771f49c954e26bcc0308160b0134d94f334fd"
+source = "git+https://github.com/nresare/surrealdb.git?branch=introduce_surrealdb_client_core_v3.0#be7c5d1b5d3de2ca542f5f64c23a9d1e4b2ce6d2"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4784,6 +4783,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "surrealdb-client-core",
  "surrealdb-core",
  "surrealdb-types",
  "surrealdb-types-derive",
@@ -4801,10 +4801,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "surrealdb-client-core"
+version = "3.0.5"
+source = "git+https://github.com/nresare/surrealdb.git?branch=introduce_surrealdb_client_core_v3.0#be7c5d1b5d3de2ca542f5f64c23a9d1e4b2ce6d2"
+dependencies = [
+ "humantime",
+ "revision",
+ "serde",
+ "surrealdb-types",
+ "tracing",
+ "uuid",
+ "web-time",
+]
+
+[[package]]
 name = "surrealdb-core"
 version = "3.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3e6a7f248c958fd5000c4fab5759503663bf93c622be10a6d7bf7d2d676b8fc"
+source = "git+https://github.com/nresare/surrealdb.git?branch=introduce_surrealdb_client_core_v3.0#be7c5d1b5d3de2ca542f5f64c23a9d1e4b2ce6d2"
 dependencies = [
  "addr",
  "affinitypool",
@@ -4871,6 +4884,7 @@ dependencies = [
  "storekey",
  "strsim",
  "subtle",
+ "surrealdb-client-core",
  "surrealdb-protocol",
  "surrealdb-types",
  "surrealmx",
@@ -4917,8 +4931,7 @@ dependencies = [
 [[package]]
 name = "surrealdb-types"
 version = "3.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c79e71d035367b933cf528c09b7ed186bc17dea58c66a1bca84d22f9abf167db"
+source = "git+https://github.com/nresare/surrealdb.git?branch=introduce_surrealdb_client_core_v3.0#be7c5d1b5d3de2ca542f5f64c23a9d1e4b2ce6d2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4943,8 +4956,7 @@ dependencies = [
 [[package]]
 name = "surrealdb-types-derive"
 version = "3.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a76abdbfc597e062daae5269251e18a84553f9090cfff423591f57c8c6765aa8"
+source = "git+https://github.com/nresare/surrealdb.git?branch=introduce_surrealdb_client_core_v3.0#be7c5d1b5d3de2ca542f5f64c23a9d1e4b2ce6d2"
 dependencies = [
  "proc-macro2",
  "quote",
