@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow =  { workspace = true }
 sha2 = "0.10"
-spki = "0.7.3"
+spki = "0.8.0"
 p256 = "0.13.2"
 ciborium = "0.2.2"
 serde_json = { workspace = true }
