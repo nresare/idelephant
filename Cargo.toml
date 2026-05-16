@@ -16,14 +16,14 @@ anyhow = { workspace = true }
 axum = "0.8"
 rust-embed = "8.11"
 tokio = { version = "1.51" }
-reqwest = { version = "0.13", features = ["json", "rustls"] }
+reqwest = { workspace = true, features = ["json", "rustls"] }
 mime_guess = "2.0"
 tower-http = { version = "0.6", features = ["trace"] }
-serde = { version = "1.0", features = ["derive"] }
+serde = { workspace = true }
 chrono = { version = "0.4", features = ["serde"]}
 tracing = "0.1"
 tracing-subscriber = {  workspace = true }
-rand = "0.10"
+rand = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
 tower-sessions-surrealdb-store = { git = "https://github.com/nresare/tower-sessions-surrealdb-store", branch = "combined_surreal3_fixes" }
@@ -34,18 +34,19 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 idelephant_webauthn = { path = "webauthn"}
 toml = "1.1"
-ssh-key = "0.6.7"
+ssh-key = { workspace = true }
 clap = { workspace = true }
 lettre = { version = "0.11", features = ["native-tls", "webpki-roots", "tokio1", "tokio1-native-tls", "builder"] }
 handlebars = "6.4"
 url = "2.5"
 jsonwebtoken = "10.3"
-p256 = { version = "0.13", features = ["pkcs8", "pem"] }
-zqlu = "0.2"
+p256 = { workspace = true, features = ["pkcs8", "pem"] }
+zqlu = { workspace = true }
 bytes = "1.11"
 
 [workspace.dependencies]
 serde_json = { version = "1.0", features = ["preserve_order"] }
+serde = { version = "1.0", features = ["derive"] }
 base64 = "0.22"
 thiserror = "2.0"
 anyhow = "1.0"
@@ -55,6 +56,11 @@ spki = { version = "0.8", features = ["alloc"]}
 sha2 = "0.10.8"
 tracing-subscriber = {  version = "0.3", features = ["env-filter"] }
 clap = { version = "4.6", features = ["derive"] }
+reqwest = "0.13"
+rand = "0.10"
+p256 = "0.13.2"
+ssh-key = "0.6.7"
+zqlu = "0.2"
 
 
 [dev-dependencies]
