@@ -8,8 +8,8 @@ anyhow = {workspace = true}
 # Keep this in sync with the spki version
 const-oid = {workspace = true}
 spki = {workspace = true}
-ssh-key = "0.6.7"
-zqlu = "0.2"
+ssh-key = {workspace = true}
+zqlu = {workspace = true}
 
 [dev-dependencies]
 hex-literal = { workspace = true}
