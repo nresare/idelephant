@@ -53,7 +53,7 @@ anyhow = "1.0"
 hex-literal = "1.1"
 const-oid = { version = "0.10", features = ["db"] }
 spki = { version = "0.8", features = ["alloc"]}
-sha2 = "0.10.8"
+sha2 = "0.11.0"
 tracing-subscriber = {  version = "0.3", features = ["env-filter"] }
 clap = { version = "4.6", features = ["derive"] }
 reqwest = "0.13"
