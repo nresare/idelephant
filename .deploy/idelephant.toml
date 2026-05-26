@@ -1,0 +1,19 @@
+root_key = "zq.luDCkyil5qf1qCJwm5lnSe97x5mROvXUMfwpOASJ0MgalZTIj"
+
+origin = "https://id.noa.re"
+
+[email]
+sender_email = "noa@resare.com"
+relay_host = "mail.resare.com"
+username = "idelephant"
+password_file = "/email-password/password"
+
+[persistence]
+uri = "ws://surrealdb.surrealdb.svc:8000"
+username = "idelephant"
+password_file = "/db-password/password"
+
+[persistence.idmouse]
+url = "http://idmouse.idmouse.svc/token/idelephant"
+token_path = "/var/run/secrets/tokens/idmouse"
+
