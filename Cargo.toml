@@ -26,9 +26,9 @@ tracing-subscriber = {  workspace = true }
 rand = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
-tower-sessions-surrealdb-store = { git = "https://github.com/nresare/tower-sessions-surrealdb-store", branch = "combined_surreal3_fixes" }
+tower-sessions-surrealdb-store = { version = "0.8.0"}
 surrealdb = { version = "3", default-features = false, features = ["protocol-ws"] }
-tower-sessions = "0.15"
+tower-sessions = "0.14"
 time = "0.3.46"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -67,6 +67,6 @@ zqlu = "0.2"
 surrealdb = { version = "3", default-features = false, features = ["kv-mem"] }
 tower = { version = "0.5", features = ["util"] }
 
-[patch.crates-io]
-surrealdb = { git = "https://github.com/nresare/surrealdb.git", branch = "introduce_surrealdb_client_core_v3.0" }
-surrealdb-types = { git = "https://github.com/nresare/surrealdb.git", branch = "introduce_surrealdb_client_core_v3.0" }
+#[patch.crates-io]
+#surrealdb = { git = "https://github.com/nresare/surrealdb.git", branch = "introduce_surrealdb_client_core_v3.0" }
+#surrealdb-types = { git = "https://github.com/nresare/surrealdb.git", branch = "introduce_surrealdb_client_core_v3.0" }
