@@ -28,7 +28,7 @@ base64 = { workspace = true }
 sha2 = { workspace = true }
 tower-sessions-surrealdb-store = { version = "0.8.0"}
 surrealdb = { version = "3", default-features = false, features = ["protocol-ws"] }
-tower-sessions = "0.14"
+tower-sessions = "0.15"
 time = "0.3.46"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
