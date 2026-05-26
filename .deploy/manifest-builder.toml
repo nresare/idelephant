@@ -1,0 +1,12 @@
+[[website]]
+name = "id.noa.re"
+namespace = "idelephant"
+replicas = 1
+image = "repo.noa.re/idelephant:0.2.2-11f923b5"
+args = ["-c", "/config/idelephant.toml"]
+custom-token-audiences = ["idmouse"]
+external-secrets = [
+    "/email-password",
+]
+config = {"/config/idelephant.toml"="idelephant.toml"}
+
