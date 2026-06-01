@@ -5500,8 +5500,7 @@ dependencies = [
 [[package]]
 name = "tower-sessions-surrealdb-store"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8b66bb2f302f81e73862281688563ff87e13ff57b34cc47e4e8fd98000c51cf"
+source = "git+https://github.com/nresare/tower-sessions-surrealdb-store?branch=use_surreal_Bytes_for_data#be7b7b4e84d5a196ee1082e4f5e6181576147ef4"
 dependencies = [
  "async-trait",
  "rmp-serde",
