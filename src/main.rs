@@ -123,6 +123,7 @@ async fn run() -> Result<(), Fatal> {
 
     let app = Router::new()
         .route("/", get(index_handler))
+        .route("/healthz", get(healthz_handler))
         .route("/static/{*path}", get(static_handler))
         .route("/logout", get(logout_handler))
         .merge(register_routes())
@@ -218,10 +219,69 @@ async fn logout_handler(session: Session) -> Result<StatusCode, IdentityError> {
     Ok(StatusCode::OK)
 }
 
+async fn healthz_handler(
+    State(persistence_service): State<PersistenceService>,
+) -> Result<StatusCode, IdentityError> {
+    persistence_service.check_health().await?;
+    Ok(StatusCode::OK)
+}
+
 async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
     StaticFile(path)
 }
 
 async fn not_found() -> (StatusCode, Html<&'static str>) {
     (StatusCode::NOT_FOUND, Html("<h1>404</h1><p>Not Found</p>"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{healthz_handler, AppState};
+    use crate::config::EmailConfig;
+    use crate::invite::InviteService;
+    use crate::oidc::OidcService;
+    use crate::persistence::{mem_db, PersistenceService};
+    use crate::register::RegistrationService;
+    use crate::web::Templates;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use axum::Router;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn healthz_reads_from_database() -> anyhow::Result<()> {
+        let db = mem_db().await?;
+        let persistence = Arc::new(PersistenceService::new(db));
+        let state = AppState {
+            ps: persistence.clone(),
+            is: Arc::new(InviteService::new(
+                persistence.clone(),
+                &EmailConfig {
+                    relay_host: "localhost".to_string(),
+                    username: None,
+                    password_file: None,
+                    sender_email: "test@example.com".to_string(),
+                },
+                "http://localhost:8080",
+            )?),
+            templates: Arc::new(Templates::new()?),
+            oidc: Arc::new(OidcService::new(
+                "http://localhost:8080",
+                persistence.as_ref().clone(),
+            )),
+            rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+        };
+        let app = Router::new()
+            .route("/healthz", get(healthz_handler))
+            .with_state(state);
+
+        let response = app
+            .oneshot(Request::builder().uri("/healthz").body(Body::empty())?)
+            .await?;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        Ok(())
+    }
 }
