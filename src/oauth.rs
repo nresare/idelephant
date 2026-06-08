@@ -657,12 +657,7 @@ mod tests {
             admin: true,
             id: None,
             state: IdentityState::Active {
-                credentials: vec![Credential {
-                    id: b"credential".to_vec(),
-                    public_key: b"public-key".to_vec(),
-                    public_key_algorithm: -7,
-                    sign_count: 0,
-                }],
+                credentials: vec![Credential::new(b"credential", b"public-key", -7, 0)],
             },
         }
     }

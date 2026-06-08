@@ -12,7 +12,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use surrealdb::engine::any;
 use surrealdb::engine::any::Any;
-use surrealdb::types::{RecordId, RecordIdKey, SurrealValue};
+use surrealdb::types::{Bytes, RecordId, RecordIdKey, SurrealValue};
 use surrealdb::Surreal;
 
 const NAMESPACE: &str = "default";
@@ -92,17 +92,27 @@ struct NewConsentGrant {
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub enum IdentityState {
-    Allocated { challenge: Vec<u8> },
+    Allocated { challenge: Bytes },
     Active { credentials: Vec<Credential> },
     Invited { token: Token },
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct Credential {
-    pub id: Vec<u8>,
-    pub public_key: Vec<u8>,
+    pub id: Bytes,
+    pub public_key: Bytes,
     pub public_key_algorithm: i32,
     pub sign_count: u32,
+}
+impl Credential {
+    pub fn new(id: &[u8], public_key: &[u8], public_key_algorithm: i32, sign_count: u32) -> Self {
+        Self {
+            id: id.to_vec().into(),
+            public_key: public_key.to_vec().into(),
+            public_key_algorithm,
+            sign_count,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
@@ -148,7 +158,7 @@ pub struct ConsentGrant {
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct JwkKey {
     pub kid: String,
-    pub private_key_der: Vec<u8>,
+    pub private_key_der: Bytes,
     pub active_from: DateTime<Utc>,
     pub retire_after: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
@@ -158,7 +168,7 @@ pub struct JwkKey {
 #[derive(Serialize, SurrealValue)]
 struct NewJwkKey {
     kid: String,
-    private_key_der: Vec<u8>,
+    private_key_der: Bytes,
     active_from: DateTime<Utc>,
     retire_after: DateTime<Utc>,
     created_at: DateTime<Utc>,
@@ -313,7 +323,7 @@ impl PersistenceService {
             .create("jwk_key")
             .content(NewJwkKey {
                 kid: kid.to_string(),
-                private_key_der: private_key_der.to_vec(),
+                private_key_der: private_key_der.to_vec().into(),
                 active_from,
                 retire_after,
                 created_at,
@@ -570,17 +580,12 @@ impl PersistenceService {
                     }
                     let mut found = false;
                     for credential in credentials.iter() {
-                        if credential.public_key == key_bytes {
+                        if credential.public_key.as_ref() == key_bytes {
                             found = true;
                         }
                     }
                     if !found {
-                        credentials.push(Credential {
-                            id: credential_id.to_vec(),
-                            public_key: key_bytes.to_vec(),
-                            public_key_algorithm: -7,
-                            sign_count: 0,
-                        });
+                        credentials.push(Credential::new(credential_id, key_bytes, -7, 0));
                         identity.state = IdentityState::Active { credentials };
                         let _: Option<Identity> = self
                             .db
@@ -603,12 +608,7 @@ impl PersistenceService {
                     created: Utc::now(),
                     admin: true,
                     state: IdentityState::Active {
-                        credentials: vec![Credential {
-                            id: credential_id.to_vec(),
-                            public_key: key_bytes.to_vec(),
-                            public_key_algorithm: -7,
-                            sign_count: 0,
-                        }],
+                        credentials: vec![Credential::new(credential_id, key_bytes, -7, 0)],
                     },
                     id: None,
                 },
@@ -646,7 +646,7 @@ mod tests {
         let mut identity = Identity {
             admin: false,
             state: IdentityState::Allocated {
-                challenge: challenge.clone(),
+                challenge: challenge.clone().into(),
             },
             email: email.to_string(),
             created,
@@ -661,12 +661,7 @@ mod tests {
         assert_eq!(result.unwrap(), identity);
 
         identity.state = IdentityState::Active {
-            credentials: vec![Credential {
-                id: b"some_id".into(),
-                public_key: b"public_key".into(),
-                public_key_algorithm: -7,
-                sign_count: 0,
-            }],
+            credentials: vec![Credential::new(b"some_id", b"public_key", -7, 0)],
         };
 
         assert!(rs.update_identity(&identity).await?);
@@ -677,12 +672,7 @@ mod tests {
         };
         assert_eq!(
             credentials,
-            vec![Credential {
-                id: b"some_id".into(),
-                public_key: b"public_key".into(),
-                public_key_algorithm: -7,
-                sign_count: 0,
-            }]
+            vec![Credential::new(b"some_id", b"public_key", -7, 0)]
         );
 
         Ok(())
@@ -795,7 +785,7 @@ mod tests {
         let fetched = ps.fetch_jwk_key_by_slot(active_from).await?.unwrap();
         assert_eq!(created.kid, "kid-1");
         assert_eq!(fetched.kid, "kid-1");
-        assert_eq!(fetched.private_key_der, b"private-key");
+        assert_eq!(fetched.private_key_der.as_ref(), b"private-key");
         assert_eq!(fetched.active_from, active_from);
         assert_eq!(fetched.retire_after, retire_after);
         Ok(())

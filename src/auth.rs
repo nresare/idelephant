@@ -90,7 +90,7 @@ fn find_key<'a>(
         return Err(anyhow!("Identity is not in state active").into());
     };
     for credential in credentials {
-        if credential.id == credential_id {
+        if credential.id.as_ref() == credential_id {
             return Ok(&credential.public_key);
         }
     }
@@ -118,12 +118,12 @@ mod tests {
             admin: false,
             id: None,
             state: IdentityState::Active {
-                credentials: vec![Credential {
-                    id: b"registered-credential".to_vec(),
-                    public_key: b"public-key".to_vec(),
-                    public_key_algorithm: -7,
-                    sign_count: 0,
-                }],
+                credentials: vec![Credential::new(
+                    b"registered-credential",
+                    b"public-key",
+                    -7,
+                    0,
+                )],
             },
         }
     }
