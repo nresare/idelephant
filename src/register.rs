@@ -80,7 +80,7 @@ async fn register_start(
     };
 
     identity.state = Allocated {
-        challenge: challenge.clone(),
+        challenge: challenge.clone().into(),
     };
     let user_id = identity.id()?;
     persistence_service.update_identity(&identity).await?;
@@ -126,12 +126,12 @@ async fn register_finish(
     );
 
     identity.state = IdentityState::Active {
-        credentials: vec![Credential {
-            id: credential.id().to_vec(),
-            public_key: credential.response().public_key.to_vec(),
-            public_key_algorithm: credential.response().public_key_algorithm,
-            sign_count: credential.response().attestation.auth_data.sign_count,
-        }],
+        credentials: vec![Credential::new(
+            credential.id(),
+            &credential.response().public_key,
+            credential.response().public_key_algorithm,
+            credential.response().attestation.auth_data.sign_count,
+        )],
     };
 
     persistence_service.update_identity(&identity).await?;
