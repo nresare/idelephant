@@ -269,6 +269,12 @@ impl PersistenceService {
         Ok(self.db.select(("identity", id)).await?)
     }
 
+    pub async fn check_health(&self) -> Result<(), IdentityError> {
+        let mut result = self.db.query("SELECT id FROM identity LIMIT 1").await?;
+        let _: Vec<Record> = result.take(0)?;
+        Ok(())
+    }
+
     pub async fn create_oauth_client(
         &self,
         client_id: &str,
