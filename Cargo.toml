@@ -60,7 +60,7 @@ reqwest = "0.13"
 rand = "0.10"
 p256 = "0.13.2"
 ssh-key = "0.6.7"
-zqlu = "0.2"
+zqlu = "0.3"
 
 
 [dev-dependencies]

@@ -6545,13 +6545,11 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[package]]
 name = "zqlu"
-version = "0.2.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43a56c46bc04e601adfce65e3abc1ea41e5d61b5043eabef7dc3535dde74a54e"
+checksum = "48d069fbb764ec4cb93fccd1fb05238c3295e9e3025d23e5c351ce7225c36a78"
 dependencies = [
- "anyhow",
  "bytes",
- "clap",
  "codeckit",
  "crc",
  "num_enum",
