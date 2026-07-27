@@ -54,7 +54,7 @@ async fn auth_finish(
 
     let user_handle = from_utf8(credential.response.user_handle.as_slice()).context(format!(
         "Could not convert user handle bytes {:?} to String",
-        &credential.response.user_handle
+        credential.response.user_handle
     ))?;
 
     let Some(identity) = persistence_service.fetch_identity(user_handle).await? else {
