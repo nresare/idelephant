@@ -2248,7 +2248,7 @@ version = "0.2.3"
 dependencies = [
  "anyhow",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.0",
  "bytes",
  "chrono",
  "clap",
@@ -2286,7 +2286,7 @@ name = "idelephant-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.0",
  "clap",
  "const-oid 0.10.2",
  "hex-literal",
@@ -2322,7 +2322,7 @@ name = "idelephant_webauthn"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.0",
  "ciborium",
  "hex",
  "hex-literal",
