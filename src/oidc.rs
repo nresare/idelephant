@@ -7,7 +7,7 @@ use base64::Engine;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use p256::ecdsa::{SigningKey, VerifyingKey};
-use p256::elliptic_curve::rand_core::OsRng;
+use p256::elliptic_curve::Generate;
 use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use serde::Serialize;
 use std::ops::Deref;
@@ -259,7 +259,7 @@ impl FromRef<AppState> for OidcService {
 }
 
 fn prepare_key() -> Result<PreparedKey, anyhow::Error> {
-    let signing_key = SigningKey::random(&mut OsRng);
+    let signing_key = SigningKey::generate();
     let der = signing_key
         .to_pkcs8_der()
         .context("Could not encode OIDC signing key to PKCS8")?;
@@ -278,7 +278,7 @@ fn slot_start(now: DateTime<Utc>) -> Result<DateTime<Utc>, IdentityError> {
 }
 
 fn build_jwk(verifying_key: &VerifyingKey, kid: &str) -> Jwk {
-    let encoded = verifying_key.to_encoded_point(false);
+    let encoded = verifying_key.to_sec1_point(false);
     let x = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
         encoded
             .x()

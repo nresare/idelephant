@@ -100,8 +100,10 @@ impl Credential for SshAgentBackedCredential {
             .client
             .sign(&self.key, message)
             .expect("signature failed");
-        let signature =
-            p256::ecdsa::Signature::try_from(signature).expect("Signature conversion failed");
+        let signature = p256_legacy::ecdsa::Signature::try_from(signature)
+            .expect("Signature conversion failed");
+        let signature = Signature::from_slice(&signature.to_bytes())
+            .expect("Signature conversion between p256 versions failed");
         signature.to_der().to_vec().into_boxed_slice()
     }
 
