@@ -164,3 +164,31 @@ strong {
         --danger-text: #f2c9bf;
     }
 }
+
+#app-form label {
+    display: block;
+    margin-top: 1rem;
+    font-weight: 650;
+}
+
+#app-form input,
+#app-form textarea {
+    width: 100%;
+    padding: 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--background);
+    color: var(--text);
+    font: inherit;
+}
+
+#app-form textarea { resize: vertical; }
+#app-form input[readonly] { color: var(--muted); }
+.app-card {
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow-wrap: anywhere;
+}
+button:disabled { opacity: 0.6; cursor: wait; }

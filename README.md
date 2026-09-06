@@ -26,6 +26,13 @@ but I have a plan and I think that the other pieces will come.
    4. ctrl-d
 4. Run `cargo run -- -c idelephant.toml`
 
+## Managing app registrations
+
+Sign in with an admin account to see **App registrations** on the home page. You can
+register apps with a unique client ID, a display name, and one redirect URI per line.
+Existing apps can be edited or deleted; client IDs stay fixed when editing.
+Deleting an app also revokes its stored access tokens, authorization codes, and consents.
+
 ## License
 
 Licensed under either of the [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0) or the
