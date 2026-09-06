@@ -26,7 +26,13 @@ pub fn oauth_routes() -> Router<AppState> {
         .route("/authorize/resume", get(resume_authorize))
         .route("/authorize/consent", post(authorize_consent))
         .route("/token", post(token))
-        .route("/oauth-client", post(create_oauth_client))
+        .route(
+            "/oauth-client",
+            get(list_oauth_clients)
+                .post(create_oauth_client)
+                .put(update_oauth_client)
+                .delete(delete_oauth_client),
+        )
         .route("/userinfo", get(userinfo))
         .route(
             "/.well-known/openid-configuration",
@@ -101,17 +107,95 @@ async fn create_oauth_client(
     State(persistence_service): State<PersistenceService>,
     Json(request): Json<CreateOAuthClientRequest>,
 ) -> Result<axum::http::StatusCode, IdentityError> {
-    let Some(identity): Option<Identity> = session.get(IDENTITY).await? else {
-        return Ok(axum::http::StatusCode::UNAUTHORIZED);
-    };
-    if !identity.admin {
-        return Ok(axum::http::StatusCode::UNAUTHORIZED);
-    }
+    require_admin(&session, &persistence_service).await?;
     validate_client_registration_request(&request)?;
+    if persistence_service
+        .fetch_oauth_client(&request.client_id)
+        .await?
+        .is_some()
+    {
+        return Err(IdentityError::BadRequest(
+            "Client ID is already registered".to_string(),
+        ));
+    }
     persistence_service
         .create_oauth_client(&request.client_id, &request.name, request.redirect_uris)
         .await?;
     Ok(axum::http::StatusCode::CREATED)
+}
+
+pub(crate) async fn current_admin(
+    session: &Session,
+    persistence: &PersistenceService,
+) -> Result<bool, IdentityError> {
+    let Some(identity): Option<Identity> = session.get(IDENTITY).await? else {
+        return Ok(false);
+    };
+    Ok(persistence
+        .fetch_identity(&identity.id()?)
+        .await?
+        .is_some_and(|identity| {
+            identity.admin
+                && matches!(
+                    identity.state,
+                    crate::persistence::IdentityState::Active { .. }
+                )
+        }))
+}
+
+async fn require_admin(
+    session: &Session,
+    persistence: &PersistenceService,
+) -> Result<(), IdentityError> {
+    if !current_admin(session, persistence).await? {
+        return Err(IdentityError::Unauthorized(
+            "An active admin login is required".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn list_oauth_clients(
+    session: Session,
+    State(ps): State<PersistenceService>,
+) -> Result<Json<Vec<OAuthClient>>, IdentityError> {
+    require_admin(&session, &ps).await?;
+    Ok(Json(ps.list_oauth_clients().await?))
+}
+
+async fn update_oauth_client(
+    session: Session,
+    State(ps): State<PersistenceService>,
+    Json(request): Json<CreateOAuthClientRequest>,
+) -> Result<axum::http::StatusCode, IdentityError> {
+    require_admin(&session, &ps).await?;
+    validate_client_registration_request(&request)?;
+    if ps
+        .update_oauth_client(&request.client_id, &request.name, request.redirect_uris)
+        .await?
+    {
+        Ok(axum::http::StatusCode::NO_CONTENT)
+    } else {
+        Ok(axum::http::StatusCode::NOT_FOUND)
+    }
+}
+
+#[derive(Deserialize)]
+struct DeleteOAuthClientRequest {
+    client_id: String,
+}
+
+async fn delete_oauth_client(
+    session: Session,
+    State(ps): State<PersistenceService>,
+    Json(request): Json<DeleteOAuthClientRequest>,
+) -> Result<axum::http::StatusCode, IdentityError> {
+    require_admin(&session, &ps).await?;
+    if ps.delete_oauth_client(&request.client_id).await? {
+        Ok(axum::http::StatusCode::NO_CONTENT)
+    } else {
+        Ok(axum::http::StatusCode::NOT_FOUND)
+    }
 }
 
 async fn authorize(
@@ -524,12 +608,12 @@ fn validate_token_request(
 fn validate_client_registration_request(
     request: &CreateOAuthClientRequest,
 ) -> Result<(), IdentityError> {
-    if request.client_id.is_empty() {
+    if request.client_id.trim().is_empty() {
         return Err(IdentityError::BadRequest(
             "client_id must not be empty".to_string(),
         ));
     }
-    if request.name.is_empty() {
+    if request.name.trim().is_empty() {
         return Err(IdentityError::BadRequest(
             "name must not be empty".to_string(),
         ));
@@ -1299,6 +1383,75 @@ mod tests {
         let created = persistence.fetch_oauth_client("configured-client").await?;
         assert!(created.is_some());
         assert_eq!(created.unwrap().name, "Configured Client");
+
+        for (method, body, expected) in [
+            ("GET", "", StatusCode::OK),
+            (
+                "POST",
+                r#"{"client_id":"configured-client","name":"Duplicate","redirect_uris":["http://localhost/cb"]}"#,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "PUT",
+                r#"{"client_id":"configured-client","name":"Updated","redirect_uris":["http://localhost/new"]}"#,
+                StatusCode::NO_CONTENT,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/oauth-client")
+                        .header(header::COOKIE, &cookie)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body))?,
+                )
+                .await?;
+            assert_eq!(response.status(), expected);
+        }
+        let updated = persistence
+            .fetch_oauth_client("configured-client")
+            .await?
+            .unwrap();
+        assert_eq!(updated.name, "Updated");
+        assert_eq!(updated.redirect_uris, vec!["http://localhost/new"]);
+
+        // Every operation requires login, including reads.
+        for method in ["GET", "POST", "PUT", "DELETE"] {
+            let response = app.clone().oneshot(Request::builder().method(method).uri("/oauth-client")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"client_id":"configured-client","name":"Unauthorized","redirect_uris":["http://localhost/cb"]}"#))?).await?;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        // Revoking admin privileges takes effect even with the existing session.
+        let mut admin = persistence.fetch_identity(&admin_id).await?.unwrap();
+        admin.admin = false;
+        persistence.update_identity(&admin).await?;
+        for method in ["GET", "POST", "PUT", "DELETE"] {
+            let response = app.clone().oneshot(Request::builder().method(method).uri("/oauth-client")
+                .header(header::COOKIE, &cookie).header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"client_id":"configured-client","name":"Unauthorized","redirect_uris":["http://localhost/cb"]}"#))?).await?;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        admin.admin = true;
+        persistence.update_identity(&admin).await?;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/oauth-client")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"client_id":"configured-client"}"#))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(persistence
+            .fetch_oauth_client("configured-client")
+            .await?
+            .is_none());
         Ok(())
     }
 }

@@ -304,6 +304,44 @@ impl PersistenceService {
         record_id_key_to_string(&result.id.key)
     }
 
+    pub async fn list_oauth_clients(&self) -> Result<Vec<OAuthClient>, IdentityError> {
+        let mut result = self
+            .db
+            .query("SELECT * FROM oauth_client ORDER BY name, client_id")
+            .await?;
+        Ok(result.take(0)?)
+    }
+
+    pub async fn update_oauth_client(
+        &self,
+        client_id: &str,
+        name: &str,
+        redirect_uris: Vec<String>,
+    ) -> Result<bool, IdentityError> {
+        let Some(client) = self.fetch_oauth_client(client_id).await? else {
+            return Ok(false);
+        };
+        let updated: Option<OAuthClient> = self
+            .db
+            .update(client.id)
+            .content(NewOAuthClient {
+                client_id: client_id.to_string(),
+                name: name.to_string(),
+                redirect_uris,
+            })
+            .await?;
+        Ok(updated.is_some())
+    }
+
+    pub async fn delete_oauth_client(&self, client_id: &str) -> Result<bool, IdentityError> {
+        let Some(client) = self.fetch_oauth_client(client_id).await? else {
+            return Ok(false);
+        };
+        self.db.query("BEGIN TRANSACTION; DELETE authorization_code WHERE client_id = $client_id; DELETE access_token WHERE client_id = $client_id; DELETE consent_grant WHERE client_id = $client_id; DELETE $record; COMMIT TRANSACTION;")
+            .bind(("client_id", client_id.to_string())).bind(("record", client.id)).await?.check()?;
+        Ok(true)
+    }
+
     pub async fn fetch_oauth_client(
         &self,
         client_id: &str,

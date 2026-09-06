@@ -42,3 +42,28 @@ impl FromRef<AppState> for Templates {
         input.templates.deref().clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Templates;
+    use serde_json::json;
+
+    #[test]
+    fn app_management_is_only_rendered_for_admins() {
+        let templates = Templates::new().unwrap();
+        for admin in [false, true] {
+            let html = templates
+                .render(
+                    "index",
+                    &json!({
+                        "identity": { "email": "admin@example.com" }, "admin": admin,
+                    }),
+                )
+                .unwrap();
+            assert_eq!(html.contains("id=\"app-form\""), admin);
+            assert_eq!(html.contains("/static/apps.js"), admin);
+        }
+        let html = templates.render("index", &json!({})).unwrap();
+        assert!(!html.contains("id=\"app-form\""));
+    }
+}

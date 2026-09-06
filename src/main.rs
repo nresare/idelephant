@@ -200,6 +200,7 @@ struct AppState {
 // We use static route matchers ("/" and "/index.html") to serve our home
 // page.
 async fn index_handler(
+    State(ps): State<PersistenceService>,
     State(templates): State<Templates>,
     session: Session,
 ) -> Result<Html<String>, IdentityError> {
@@ -210,7 +211,7 @@ async fn index_handler(
         .is_some();
     Ok(Html(templates.render(
         "index",
-        &json!({"identity": id, "pending_authorization": pending_authorization}),
+        &json!({"identity": id, "admin": oauth::current_admin(&session, &ps).await?, "pending_authorization": pending_authorization}),
     )?))
 }
 
