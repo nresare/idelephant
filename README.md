@@ -33,6 +33,19 @@ register apps with a unique client ID, a display name, and one redirect URI per 
 Existing apps can be edited or deleted; client IDs stay fixed when editing.
 Deleting an app also revokes its stored access tokens, authorization codes, and consents.
 
+## Groups
+
+Admins can create and delete groups and add or remove active users from the Groups
+section on the home page. Each group has a fixed unique ID and a display name.
+Membership does not change the user's idElephant admin privileges.
+
+Apps request `scope=openid groups` to receive a `groups` claim containing an array
+of group IDs in the ID token and `/userinfo` response. The claim is omitted without
+that scope and is an empty array when the user has no memberships. Consent screens
+explicitly describe sharing group memberships, and discovery advertises the scope
+and claim. Memberships are read from the database at token issuance and on each
+UserInfo request. Already issued ID tokens retain their claims until expiry.
+
 ## License
 
 Licensed under either of the [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0) or the

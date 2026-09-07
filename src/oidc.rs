@@ -55,6 +55,11 @@ pub struct Jwk {
     pub y: String,
 }
 
+pub struct IdTokenUser<'a> {
+    pub email: &'a str,
+    pub include_groups: bool,
+}
+
 #[derive(Serialize)]
 struct IdTokenClaims<'a> {
     iss: &'a str,
@@ -65,6 +70,8 @@ struct IdTokenClaims<'a> {
     auth_time: i64,
     nonce: Option<&'a str>,
     email: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    groups: Option<Vec<String>>,
 }
 
 struct PreparedKey {
@@ -94,6 +101,7 @@ impl OidcService {
                 "openid".to_string(),
                 "email".to_string(),
                 "profile".to_string(),
+                "groups".to_string(),
             ],
             token_endpoint_auth_methods_supported: vec!["none".to_string()],
             claims_supported: vec![
@@ -104,6 +112,7 @@ impl OidcService {
                 "iat".to_string(),
                 "auth_time".to_string(),
                 "nonce".to_string(),
+                "groups".to_string(),
                 "email".to_string(),
             ],
             grant_types_supported: vec!["authorization_code".to_string()],
@@ -130,9 +139,9 @@ impl OidcService {
         subject: &str,
         audience: &str,
         nonce: Option<&str>,
-        email: &str,
+        user: IdTokenUser<'_>,
     ) -> Result<String, IdentityError> {
-        self.mint_id_token_at(subject, audience, nonce, email, Utc::now())
+        self.mint_id_token_at(subject, audience, nonce, user, Utc::now())
             .await
     }
 
@@ -153,7 +162,7 @@ impl OidcService {
         subject: &str,
         audience: &str,
         nonce: Option<&str>,
-        email: &str,
+        user: IdTokenUser<'_>,
         now: DateTime<Utc>,
     ) -> Result<String, IdentityError> {
         self.reconcile_keys(now).await?;
@@ -174,7 +183,12 @@ impl OidcService {
             iat: now.timestamp(),
             auth_time: now.timestamp(),
             nonce,
-            email,
+            email: user.email,
+            groups: if user.include_groups {
+                Some(self.persistence.groups_for_user(subject).await?)
+            } else {
+                None
+            },
         };
         let mut header = Header::new(Algorithm::ES256);
         header.kid = Some(signing_key.kid.clone());
@@ -244,10 +258,10 @@ impl OidcService {
         subject: &str,
         audience: &str,
         nonce: Option<&str>,
-        email: &str,
+        user: IdTokenUser<'_>,
         now: DateTime<Utc>,
     ) -> Result<String, IdentityError> {
-        self.mint_id_token_at(subject, audience, nonce, email, now)
+        self.mint_id_token_at(subject, audience, nonce, user, now)
             .await
     }
 }
@@ -314,6 +328,7 @@ mod tests {
     use super::{slot_start, OidcService};
     use crate::persistence::{mem_db, PersistenceService};
     use anyhow::Result;
+    use base64::Engine;
     use chrono::{Duration, TimeZone, Utc};
     use jsonwebtoken::decode_header;
 
@@ -326,10 +341,78 @@ mod tests {
                 "identity:alice",
                 "client-1",
                 Some("nonce-123"),
-                "alice@example.com",
+                super::IdTokenUser {
+                    email: "alice@example.com",
+                    include_groups: false,
+                },
             )
             .await?;
         assert_eq!(token.split('.').count(), 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn group_claims_are_scoped_and_read_at_issuance() -> Result<()> {
+        use crate::persistence::{Identity, IdentityState};
+        let ps = PersistenceService::new(mem_db().await?);
+        let id = ps
+            .persist_identity(Identity {
+                email: "alice@example.com".to_string(),
+                created: Utc::now(),
+                admin: false,
+                id: None,
+                state: IdentityState::Active {
+                    credentials: vec![],
+                },
+            })
+            .await?;
+        ps.create_group("engineering", "Engineering").await?;
+        ps.set_group_membership("engineering", &id, true).await?;
+        let oidc = OidcService::new("http://localhost:8080", ps.clone());
+        for (include_groups, expected) in [
+            (false, None),
+            (true, Some(serde_json::json!(["engineering"]))),
+        ] {
+            let token = oidc
+                .mint_id_token(
+                    &id,
+                    "client-1",
+                    None,
+                    super::IdTokenUser {
+                        email: "alice@example.com",
+                        include_groups,
+                    },
+                )
+                .await?;
+            let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(token.split('.').nth(1).unwrap())?;
+            let claims: serde_json::Value = serde_json::from_slice(&payload)?;
+            assert_eq!(claims.get("groups"), expected.as_ref());
+        }
+        ps.set_group_membership("engineering", &id, false).await?;
+        let token = oidc
+            .mint_id_token(
+                &id,
+                "client-1",
+                None,
+                super::IdTokenUser {
+                    email: "alice@example.com",
+                    include_groups: true,
+                },
+            )
+            .await?;
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(token.split('.').nth(1).unwrap())?;
+        let claims: serde_json::Value = serde_json::from_slice(&payload)?;
+        assert_eq!(claims["groups"], serde_json::json!([]));
+        assert!(oidc
+            .configuration()
+            .scopes_supported
+            .contains(&"groups".to_string()));
+        assert!(oidc
+            .configuration()
+            .claims_supported
+            .contains(&"groups".to_string()));
         Ok(())
     }
 
@@ -393,7 +476,10 @@ mod tests {
                 "identity:alice",
                 "client-1",
                 Some("nonce-123"),
-                "alice@example.com",
+                super::IdTokenUser {
+                    email: "alice@example.com",
+                    include_groups: false,
+                },
                 now,
             )
             .await?;
