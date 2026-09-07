@@ -15,7 +15,7 @@ idelephant_webauthn = {path = "../webauthn"}
 idelephant_common = {path = "../common"}
 p256 = { workspace = true, features = ["ecdsa"] }
 # Keep this aligned with ssh-key until it adopts p256 0.14.
-p256_legacy = { package = "p256", version = "0.13.2" }
+p256_legacy = { package = "p256", version = "0.14.0" }
 const-oid = { workspace = true }
 rand = { workspace = true }
 spki = { workspace = true }
