@@ -62,6 +62,8 @@ mod tests {
                 .unwrap();
             assert_eq!(html.contains("id=\"app-form\""), admin);
             assert_eq!(html.contains("/static/apps.js"), admin);
+            assert_eq!(html.contains("id=\"group-form\""), admin);
+            assert_eq!(html.contains("/static/groups.js"), admin);
         }
         let html = templates.render("index", &json!({})).unwrap();
         assert!(!html.contains("id=\"app-form\""));

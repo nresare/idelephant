@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod embed;
 mod error;
+mod groups;
 mod idmouse;
 mod invite;
 mod later;
@@ -130,6 +131,7 @@ async fn run() -> Result<(), Fatal> {
         .merge(auth_routes())
         .merge(invite_routes())
         .merge(oauth_routes())
+        .merge(groups::routes())
         .fallback_service(get(not_found))
         .layer(session_layer)
         .layer(
