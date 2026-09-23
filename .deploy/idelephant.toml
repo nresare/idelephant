@@ -10,10 +10,6 @@ password_file = "/email-password/password"
 
 [persistence]
 uri = "ws://surrealdb.surrealdb.svc:8000"
-username = "idelephant"
-password_file = "/db-password/password"
-
 [persistence.idmouse]
 url = "http://idmouse.idmouse.svc/token/idelephant"
 token_path = "/var/run/secrets/tokens/idmouse"
-
