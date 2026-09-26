@@ -21,6 +21,9 @@
 {{else}}
 <p>Do you consent to continuing the login process using your account on {{idp_basename}}?</p>
 {{/if}}
+{{#if requests_groups}}
+<p>This app is also requesting your group memberships. Continuing shares your group IDs with {{client_name}}.</p>
+{{/if}}
 <p class="muted">You are currently signed in as <strong>{{identity_email}}</strong>.</p>
 <form class="button-group" action="/authorize/consent" method="post">
 <button type="submit" name="decision" value="approve">Yes, continue</button>

@@ -100,6 +100,8 @@ struct TokenResponse {
 struct UserinfoResponse {
     sub: String,
     email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    groups: Option<Vec<String>>,
 }
 
 async fn create_oauth_client(
@@ -143,7 +145,7 @@ pub(crate) async fn current_admin(
         }))
 }
 
-async fn require_admin(
+pub(crate) async fn require_admin(
     session: &Session,
     persistence: &PersistenceService,
 ) -> Result<(), IdentityError> {
@@ -395,7 +397,10 @@ async fn token(
                     &code.subject_id,
                     &code.client_id,
                     code.nonce.as_deref(),
-                    &identity.email,
+                    crate::oidc::IdTokenUser {
+                        email: &identity.email,
+                        include_groups: code.scopes.iter().any(|scope| scope == "groups"),
+                    },
                 )
                 .await?,
         )
@@ -430,7 +435,17 @@ async fn userinfo(
         .fetch_identity(&access_token.subject_id)
         .await?
         .ok_or_else(|| IdentityError::BadRequest("Unknown identity".to_string()))?;
+    let groups = if access_token.scopes.iter().any(|scope| scope == "groups") {
+        Some(
+            persistence_service
+                .groups_for_user(&access_token.subject_id)
+                .await?,
+        )
+    } else {
+        None
+    };
     Ok(axum::Json(UserinfoResponse {
+        groups,
         sub: access_token.subject_id,
         email: identity.email,
     }))
@@ -505,6 +520,7 @@ async fn continue_authorization(
             "identity_email": identity.email,
             "scopes": pending.scopes,
             "requests_email": pending.scopes.iter().any(|scope| scope == "email"),
+            "requests_groups": pending.scopes.iter().any(|scope| scope == "groups"),
         }),
     )?;
     Ok(Html(body).into_response())
@@ -631,8 +647,8 @@ fn validate_client_registration_request(
     Ok(())
 }
 
-fn allowed_scopes() -> [&'static str; 3] {
-    ["openid", "profile", "email"]
+fn allowed_scopes() -> [&'static str; 4] {
+    ["openid", "profile", "email", "groups"]
 }
 
 fn verify_pkce(code_verifier: &str, expected_challenge: &str) -> bool {
@@ -931,6 +947,7 @@ mod tests {
                 get(test_pending_authorization),
             )
             .merge(crate::oauth::oauth_routes())
+            .merge(crate::groups::routes())
             .layer(crate::make_session_layer(db.clone()))
             .with_state(state)
     }
@@ -1380,6 +1397,96 @@ mod tests {
             .await?;
         assert_eq!(create.status(), StatusCode::CREATED);
 
+        // Group management requires an admin session for reads and writes.
+        let group_body = serde_json::json!({"group_id": "engineering", "name": "Engineering", "user_id": admin_id}).to_string();
+        for (path, method) in [
+            ("/groups", "GET"),
+            ("/groups/users", "GET"),
+            ("/groups", "POST"),
+            ("/groups", "DELETE"),
+            ("/groups/members", "POST"),
+            ("/groups/members", "DELETE"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(group_body.clone()))?,
+                )
+                .await?;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        for (path, method, expected) in [
+            ("/groups", "POST", StatusCode::CREATED),
+            ("/groups", "POST", StatusCode::BAD_REQUEST),
+            ("/groups/members", "POST", StatusCode::NO_CONTENT),
+            ("/groups/members", "POST", StatusCode::NO_CONTENT),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header(header::COOKIE, &cookie)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(group_body.clone()))?,
+                )
+                .await?;
+            assert_eq!(
+                response.status(),
+                expected,
+                "{}",
+                String::from_utf8_lossy(&response_body(response).await)
+            );
+        }
+        assert_eq!(
+            persistence.groups_for_user(&admin_id).await?,
+            vec!["engineering"]
+        );
+        assert_eq!(
+            persistence.list_groups().await?[0].members,
+            vec![admin_id.clone()]
+        );
+        assert!(persistence
+            .list_group_users()
+            .await?
+            .iter()
+            .any(|(id, _)| id == &admin_id));
+        for (token, scopes, expected) in [
+            (
+                "with-groups",
+                vec!["openid".to_string(), "groups".to_string()],
+                Some(serde_json::json!(["engineering"])),
+            ),
+            ("without-groups", vec!["openid".to_string()], None),
+        ] {
+            persistence
+                .create_access_token(
+                    token,
+                    "configured-client",
+                    &admin_id,
+                    scopes,
+                    Utc::now() + Duration::minutes(5),
+                )
+                .await?;
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/userinfo")
+                        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                        .body(Body::empty())?,
+                )
+                .await?;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: Value = serde_json::from_slice(&response_body(response).await)?;
+            assert_eq!(body.get("groups"), expected.as_ref());
+        }
+
         let created = persistence.fetch_oauth_client("configured-client").await?;
         assert!(created.is_some());
         assert_eq!(created.unwrap().name, "Configured Client");
@@ -1435,8 +1542,50 @@ mod tests {
                 .body(Body::from(r#"{"client_id":"configured-client","name":"Unauthorized","redirect_uris":["http://localhost/cb"]}"#))?).await?;
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         }
+        for (path, method) in [
+            ("/groups", "GET"),
+            ("/groups/users", "GET"),
+            ("/groups", "POST"),
+            ("/groups", "DELETE"),
+            ("/groups/members", "POST"),
+            ("/groups/members", "DELETE"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header(header::COOKIE, &cookie)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(group_body.clone()))?,
+                )
+                .await?;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
         admin.admin = true;
         persistence.update_identity(&admin).await?;
+        for (path, method, expected) in [
+            ("/groups/members", "DELETE", StatusCode::NO_CONTENT),
+            ("/groups/members", "POST", StatusCode::NO_CONTENT),
+            ("/groups", "DELETE", StatusCode::NO_CONTENT),
+            ("/groups/members", "POST", StatusCode::NOT_FOUND),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header(header::COOKIE, &cookie)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(group_body.clone()))?,
+                )
+                .await?;
+            assert_eq!(response.status(), expected);
+        }
+        assert!(persistence.groups_for_user(&admin_id).await?.is_empty());
+        assert!(persistence.list_groups().await?.is_empty());
         let response = app
             .oneshot(
                 Request::builder()

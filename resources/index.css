@@ -165,14 +165,14 @@ strong {
     }
 }
 
-#app-form label {
+#app-form label, .management-form label {
     display: block;
     margin-top: 1rem;
     font-weight: 650;
 }
 
 #app-form input,
-#app-form textarea {
+#app-form textarea, .management-form input, .management-form select {
     width: 100%;
     padding: 0.65rem;
     border: 1px solid var(--border);
@@ -192,3 +192,5 @@ strong {
     overflow-wrap: anywhere;
 }
 button:disabled { opacity: 0.6; cursor: wait; }
+
+.group-member { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.5rem; }

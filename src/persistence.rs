@@ -50,6 +50,19 @@ struct NewOAuthClient {
     redirect_uris: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, SurrealValue)]
+pub struct Group {
+    pub group_id: String,
+    pub name: String,
+    pub members: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, SurrealValue)]
+pub struct GroupUser {
+    pub id: RecordId,
+    pub email: String,
+}
+
 #[derive(Serialize, SurrealValue)]
 struct NewAuthorizationCode {
     code: String,
@@ -234,6 +247,7 @@ async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
     db.query(
         "DEFINE INDEX IF NOT EXISTS identityEmail ON identity FIELDS email UNIQUE;
          DEFINE INDEX IF NOT EXISTS inviteToken ON identity FIELDS state.Invited.token UNIQUE;
+         DEFINE INDEX IF NOT EXISTS groupIdentifier ON user_group FIELDS group_id UNIQUE;
          DEFINE INDEX IF NOT EXISTS oauthClientId ON oauth_client FIELDS client_id UNIQUE;
          DEFINE INDEX IF NOT EXISTS authorizationCode ON authorization_code FIELDS code UNIQUE;
          DEFINE INDEX IF NOT EXISTS accessTokenHash ON access_token FIELDS token_hash UNIQUE;
@@ -302,6 +316,97 @@ impl PersistenceService {
             .await?
             .ok_or_else(|| Logic("Create didn't fail but returned None".to_string()))?;
         record_id_key_to_string(&result.id.key)
+    }
+
+    pub async fn list_groups(&self) -> Result<Vec<Group>, IdentityError> {
+        let mut result = self
+            .db
+            .query("SELECT * FROM user_group ORDER BY group_id")
+            .await?;
+        Ok(result.take(0)?)
+    }
+
+    pub async fn create_group(&self, group_id: &str, name: &str) -> Result<(), IdentityError> {
+        let result: Result<Option<Group>, surrealdb::Error> = self
+            .db
+            .create(("user_group", group_id))
+            .content(Group {
+                group_id: group_id.to_string(),
+                name: name.to_string(),
+                members: vec![],
+            })
+            .await;
+        match result {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(Logic("Group creation returned no record".to_string())),
+            Err(error)
+                if error.message().contains("already exists")
+                    || error
+                        .message()
+                        .contains("groupIdentifier` already contains") =>
+            {
+                Err(IdentityError::BadRequest(
+                    "Group ID is already registered".to_string(),
+                ))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub async fn delete_group(&self, group_id: &str) -> Result<bool, IdentityError> {
+        let deleted: Option<Group> = self.db.delete(("user_group", group_id)).await?;
+        Ok(deleted.is_some())
+    }
+
+    pub async fn set_group_membership(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        add: bool,
+    ) -> Result<bool, IdentityError> {
+        if add {
+            let identity = self
+                .fetch_identity(user_id)
+                .await?
+                .ok_or_else(|| IdentityError::BadRequest("Unknown user".to_string()))?;
+            if !matches!(identity.state, IdentityState::Active { .. }) {
+                return Err(IdentityError::BadRequest(
+                    "Only active users can be added to groups".to_string(),
+                ));
+            }
+        }
+        // Modify membership in the database so concurrent edits do not overwrite one another.
+        let query = if add {
+            "UPDATE user_group SET members = array::union(members, [$user_id]) WHERE group_id = $group_id RETURN AFTER"
+        } else {
+            "UPDATE user_group SET members = array::complement(members, [$user_id]) WHERE group_id = $group_id RETURN AFTER"
+        };
+        let mut result = self
+            .db
+            .query(query)
+            .bind(("group_id", group_id.to_string()))
+            .bind(("user_id", user_id.to_string()))
+            .await?;
+        let updated: Vec<Group> = result.take(0)?;
+        Ok(!updated.is_empty())
+    }
+
+    pub async fn groups_for_user(&self, user_id: &str) -> Result<Vec<String>, IdentityError> {
+        let mut result = self.db.query("SELECT VALUE group_id FROM user_group WHERE members CONTAINS $user_id ORDER BY group_id")
+            .bind(("user_id", user_id.to_string())).await?;
+        Ok(result.take(0)?)
+    }
+
+    pub async fn list_group_users(&self) -> Result<Vec<(String, String)>, IdentityError> {
+        let mut result = self
+            .db
+            .query("SELECT id, email FROM identity WHERE state.Active != NONE ORDER BY email")
+            .await?;
+        let users: Vec<GroupUser> = result.take(0)?;
+        users
+            .into_iter()
+            .map(|user| Ok((record_id_key_to_string(&user.id.key)?, user.email)))
+            .collect()
     }
 
     pub async fn list_oauth_clients(&self) -> Result<Vec<OAuthClient>, IdentityError> {
