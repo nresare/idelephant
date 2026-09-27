@@ -35,7 +35,7 @@ use serde::Deserialize;
 use serde_json::json;
 use ssh_key::HashAlg;
 use std::io;
-use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::Arc;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
@@ -122,12 +122,13 @@ async fn run() -> Result<(), Fatal> {
     let config = std::fs::read_to_string(&cli.config_path)
         .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e.into()))?;
 
-    let config: Config =
+    let mut config: Config =
         toml::from_str(&config).map_err(|e| Fatal::ReadConfigFile(cli.config_path, e.into()))?;
-    if cli.bypass_authentication && !is_loopback_url(&config.origin) {
+    config.bypass_authentication |= cli.bypass_authentication;
+    if config.bypass_authentication && !is_loopback_url(&config.origin) {
         return Err(Fatal::BypassRequiresLoopbackOrigin);
     }
-    if cli.bypass_authentication && !is_loopback_url(&config.persistence.uri) {
+    if config.bypass_authentication && !is_loopback_url(&config.persistence.uri) {
         return Err(Fatal::BypassRequiresLoopbackDatabase);
     }
 
@@ -137,7 +138,7 @@ async fn run() -> Result<(), Fatal> {
         .map_err(|e| Fatal::DbSetup(e.into()))?;
 
     let session_layer = make_session_layer(db.clone());
-    let state = build_app_state(&config, db, cli.bypass_authentication).await?;
+    let state = build_app_state(&config, db).await?;
 
     let app = Router::new()
         .route("/", get(index_handler))
@@ -160,14 +161,14 @@ async fn run() -> Result<(), Fatal> {
         )
         .with_state(state);
 
-    let addr = if cli.bypass_authentication {
-        SocketAddr::from(([127, 0, 0, 1], 8080))
+    let addr = if config.bypass_authentication {
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))
     } else {
         ADDR
     };
     info!(
         ?addr,
-        bypass_authentication = cli.bypass_authentication,
+        bypass_authentication = config.bypass_authentication,
         "listening"
     );
     let listener = tokio::net::TcpListener::bind(addr)
@@ -191,11 +192,7 @@ fn is_loopback_url(origin: &str) -> bool {
     }
 }
 
-async fn build_app_state(
-    config: &Config,
-    db: Arc<Surreal<Any>>,
-    bypass_authentication: bool,
-) -> Result<AppState, Fatal> {
+async fn build_app_state(config: &Config, db: Arc<Surreal<Any>>) -> Result<AppState, Fatal> {
     let ps = Arc::new(PersistenceService::new(db));
     let rs = Arc::new(
         RegistrationService::new(&config.origin)
@@ -222,7 +219,7 @@ async fn build_app_state(
         templates,
         oidc,
         rs,
-        bypass_authentication,
+        bypass_authentication: config.bypass_authentication,
     };
     Ok(state)
 }
