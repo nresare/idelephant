@@ -357,6 +357,18 @@ impl PersistenceService {
         Ok(result.take(0)?)
     }
 
+    pub async fn fetch_identity_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<Identity>, IdentityError> {
+        let mut result = self
+            .db
+            .query("SELECT * FROM identity WHERE email = $email LIMIT 1")
+            .bind(("email", email.to_string()))
+            .await?;
+        Ok(result.take(0)?)
+    }
+
     pub async fn fetch_group(&self, id: &str) -> Result<Option<Group>, IdentityError> {
         Ok(self.db.select(("user_group", id)).await?)
     }
@@ -445,6 +457,25 @@ impl PersistenceService {
         }
         names.sort();
         Ok(names)
+    }
+
+    pub async fn create_development_identity(
+        &self,
+        email: &str,
+    ) -> Result<Identity, IdentityError> {
+        let identity = Identity {
+            email: email.to_string(),
+            created: Utc::now(),
+            admin: false,
+            id: None,
+            state: IdentityState::Active {
+                credentials: Vec::new(),
+            },
+        };
+        let _: Option<Record> = self.db.create("identity").content(identity).await?;
+        self.fetch_identity_by_email(email)
+            .await?
+            .ok_or_else(|| Logic("Development identity creation returned no record".to_string()))
     }
 
     pub async fn check_health(&self) -> Result<(), IdentityError> {

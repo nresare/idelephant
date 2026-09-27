@@ -17,14 +17,32 @@ but I have a plan and I think that the other pieces will come.
 
 ## Local development 
 
-1. Install a local surrealdb. I installed mine with `brew install surrealdb/tap/surreal`
-2. in a shell, start with `surreal start --user noa --pass secret surrealkv://$HOME/slask/devdb`
-3. Create a database user by issuing the following commands:
-   1. `surreal sql --user noa --pass secret`
-   2. `use ns default db idelephant`
-   3. `DEFINE USER idelephant ON DATABASE PASSWORD 'idelephant' ROLES OWNER`
-   4. ctrl-d
-4. Run `cargo run -- -c idelephant.toml`
+Install the SurrealDB CLI and run:
+
+```sh
+./scripts/local-db.sh start
+cargo run -- --bypass-authentication -c local-dev/idelephant.toml
+```
+
+The script starts a database on `127.0.0.1:8001`, creates a database user named
+`idelephant`, and writes its password to `local-dev/idelephant-password`. The
+generated config points to that file. It also creates a SurrealDB root administrator
+named `local_admin`, whose password is in `local-dev/root-password`. These files and
+the database are excluded from Git. Run `./scripts/local-db.sh stop` when finished.
+
+To inspect the database as its administrator:
+
+```sh
+(cd local-dev && \
+  SURREAL_USER=local_admin SURREAL_PASS="$(cat root-password)" \
+  surreal sql --endpoint ws://127.0.0.1:8001 --namespace default --database idelephant)
+```
+
+With `--bypass-authentication`, open `http://127.0.0.1:8080/?user=root` to sign in as
+the built-in app administrator. `/?user=alice@example.test` signs in as an existing
+user with that email, or creates a non-admin test user on first use. The flag only
+works with a loopback `origin` and database URI, and makes the app listen on
+`127.0.0.1`.
 
 ## Managing app registrations
 
