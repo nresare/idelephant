@@ -41,6 +41,9 @@
 <p class="action-row"><input id="logout" type="submit" value="log out"></p>
 {{else}}
 <p class="action-row"><input id="authenticate" type="submit" value="log in"></p>
+{{#if bypass_authentication}}
+<p class="muted">Local testing: <a href="/?user=root">sign in as the root admin</a>, or open <code>/?user=your-email@example.com</code> for another active user.</p>
+{{/if}}
 {{/if}}
 </section>
 </main>

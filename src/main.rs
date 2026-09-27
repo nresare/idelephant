@@ -24,13 +24,14 @@ use crate::oidc::OidcService;
 use crate::persistence::{make_db, Identity, PersistenceService};
 use crate::register::{register_routes, RegistrationService};
 use crate::web::Templates;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, Router};
 use clap::Parser;
 use embed::StaticFile;
 use idelephant_common::{convert_key, ToBoxedSlice};
+use serde::Deserialize;
 use serde_json::json;
 use ssh_key::HashAlg;
 use std::io;
@@ -50,6 +51,7 @@ use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
+use url::{Host, Url};
 
 #[derive(Parser)]
 struct Cli {
@@ -60,6 +62,11 @@ struct Cli {
         default_value = "/etc/idelephant.toml"
     )]
     config_path: String,
+    #[arg(
+        long,
+        help = "Enable local-only login with /?user=<identity ID or email>"
+    )]
+    bypass_authentication: bool,
 }
 
 #[derive(Error, Debug)]
@@ -76,6 +83,10 @@ enum Fatal {
     Listen(SocketAddr, io::Error),
     #[error("Failed to set up email transport: {0}")]
     EmailTransport(anyhow::Error),
+    #[error("--bypass-authentication requires a loopback origin in the config file")]
+    BypassRequiresLoopbackOrigin,
+    #[error("--bypass-authentication requires a loopback database URI in the config file")]
+    BypassRequiresLoopbackDatabase,
 }
 
 #[tokio::main]
@@ -113,6 +124,12 @@ async fn run() -> Result<(), Fatal> {
 
     let config: Config =
         toml::from_str(&config).map_err(|e| Fatal::ReadConfigFile(cli.config_path, e.into()))?;
+    if cli.bypass_authentication && !is_loopback_url(&config.origin) {
+        return Err(Fatal::BypassRequiresLoopbackOrigin);
+    }
+    if cli.bypass_authentication && !is_loopback_url(&config.persistence.uri) {
+        return Err(Fatal::BypassRequiresLoopbackDatabase);
+    }
 
     let later = LaterService::new();
     let db = make_db(&config.persistence, later)
@@ -120,7 +137,7 @@ async fn run() -> Result<(), Fatal> {
         .map_err(|e| Fatal::DbSetup(e.into()))?;
 
     let session_layer = make_session_layer(db.clone());
-    let state = build_app_state(&config, db).await?;
+    let state = build_app_state(&config, db, cli.bypass_authentication).await?;
 
     let app = Router::new()
         .route("/", get(index_handler))
@@ -143,17 +160,42 @@ async fn run() -> Result<(), Fatal> {
         )
         .with_state(state);
 
-    info!(?ADDR, "listening");
-    let listener = tokio::net::TcpListener::bind(ADDR)
+    let addr = if cli.bypass_authentication {
+        SocketAddr::from(([127, 0, 0, 1], 8080))
+    } else {
+        ADDR
+    };
+    info!(
+        ?addr,
+        bypass_authentication = cli.bypass_authentication,
+        "listening"
+    );
+    let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .map_err(|e| Fatal::Listen(ADDR, e))?;
+        .map_err(|e| Fatal::Listen(addr, e))?;
     axum::serve(listener, app.into_make_service())
         .await
         .map_err(|e| Fatal::Other(e.into()))?;
     Ok(())
 }
 
-async fn build_app_state(config: &Config, db: Arc<Surreal<Any>>) -> Result<AppState, Fatal> {
+fn is_loopback_url(origin: &str) -> bool {
+    let Ok(url) = Url::parse(origin) else {
+        return false;
+    };
+    match url.host() {
+        Some(Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Some(Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
+async fn build_app_state(
+    config: &Config,
+    db: Arc<Surreal<Any>>,
+    bypass_authentication: bool,
+) -> Result<AppState, Fatal> {
     let ps = Arc::new(PersistenceService::new(db));
     let rs = Arc::new(
         RegistrationService::new(&config.origin)
@@ -180,6 +222,7 @@ async fn build_app_state(config: &Config, db: Arc<Surreal<Any>>) -> Result<AppSt
         templates,
         oidc,
         rs,
+        bypass_authentication,
     };
     Ok(state)
 }
@@ -199,24 +242,74 @@ struct AppState {
     templates: Arc<Templates>,
     oidc: Arc<OidcService>,
     rs: Arc<RegistrationService>,
+    bypass_authentication: bool,
 }
 
 // We use static route matchers ("/" and "/index.html") to serve our home
 // page.
+#[derive(Deserialize)]
+struct IndexQuery {
+    user: Option<String>,
+}
+
 async fn index_handler(
-    State(ps): State<PersistenceService>,
-    State(templates): State<Templates>,
+    State(state): State<AppState>,
+    Query(query): Query<IndexQuery>,
     session: Session,
-) -> Result<Html<String>, IdentityError> {
+) -> Result<Response, IdentityError> {
+    if let Some(user) = query.user {
+        if !state.bypass_authentication {
+            return Err(IdentityError::Unauthorized(
+                "URL login is disabled".to_string(),
+            ));
+        }
+        let user = user.trim();
+        if user.is_empty() {
+            return Err(IdentityError::BadRequest(
+                "user must not be empty".to_string(),
+            ));
+        }
+        let id = user.strip_prefix("identity:").unwrap_or(user);
+        let identity = match state.ps.fetch_identity(id).await? {
+            Some(identity) => Some(identity),
+            None => state.ps.fetch_identity_by_email(user).await?,
+        };
+        let identity = match identity {
+            Some(identity) => identity,
+            None if user.contains('@')
+                && !user.chars().any(char::is_whitespace)
+                && user.len() <= 254 =>
+            {
+                state.ps.create_development_identity(user).await?
+            }
+            None => return Err(IdentityError::Unauthorized("Unknown user".to_string())),
+        };
+        if !matches!(identity.state, persistence::IdentityState::Active { .. }) {
+            return Err(IdentityError::Unauthorized(
+                "User is not active".to_string(),
+            ));
+        }
+        session.insert(IDENTITY, &identity).await?;
+        let pending_authorization = session
+            .get::<serde_json::Value>(PENDING_AUTHORIZATION)
+            .await?
+            .is_some();
+        return Ok(Redirect::to(if pending_authorization {
+            "/authorize/resume"
+        } else {
+            "/"
+        })
+        .into_response());
+    }
     let id: Option<Identity> = session.get(IDENTITY).await?;
     let pending_authorization: bool = session
         .get::<serde_json::Value>(PENDING_AUTHORIZATION)
         .await?
         .is_some();
-    Ok(Html(templates.render(
+    Ok(Html(state.templates.render(
         "index",
-        &json!({"identity": id, "admin": oauth::current_admin(&session, &ps).await?, "pending_authorization": pending_authorization}),
-    )?))
+        &json!({"identity": id, "admin": oauth::current_admin(&session, &state.ps).await?, "pending_authorization": pending_authorization, "bypass_authentication": state.bypass_authentication}),
+    )?).into_response())
 }
 
 async fn admin_page(
@@ -274,17 +367,18 @@ async fn not_found() -> (StatusCode, Html<&'static str>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{healthz_handler, AppState};
+    use super::{healthz_handler, index_handler, is_loopback_url, AppState};
     use crate::config::EmailConfig;
     use crate::invite::InviteService;
     use crate::oidc::OidcService;
-    use crate::persistence::{mem_db, PersistenceService};
+    use crate::persistence::{mem_db, Credential, Identity, IdentityState, PersistenceService};
     use crate::register::RegistrationService;
     use crate::web::Templates;
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
+    use axum::body::{to_bytes, Body};
+    use axum::http::{header, Request, StatusCode};
     use axum::routing::get;
     use axum::Router;
+    use chrono::Utc;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -310,6 +404,7 @@ mod tests {
                 persistence.as_ref().clone(),
             )),
             rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+            bypass_authentication: false,
         };
         let app = Router::new()
             .route("/healthz", get(healthz_handler))
@@ -320,6 +415,128 @@ mod tests {
             .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
+        Ok(())
+    }
+
+    #[test]
+    fn bypass_authentication_only_accepts_loopback_urls() {
+        assert!(is_loopback_url("http://localhost:8080"));
+        assert!(is_loopback_url("http://127.0.0.1:8080"));
+        assert!(is_loopback_url("http://[::1]:8080"));
+        assert!(!is_loopback_url("https://example.com"));
+        assert!(!is_loopback_url("http://192.168.1.2:8080"));
+    }
+
+    #[tokio::test]
+    async fn url_login_requires_flag_and_can_create_local_user() -> anyhow::Result<()> {
+        let db = mem_db().await?;
+        let ps = Arc::new(PersistenceService::new(db.clone()));
+        ps.persist_identity_with_id(
+            "root",
+            Identity {
+                email: "root_user".to_string(),
+                created: Utc::now(),
+                admin: true,
+                id: None,
+                state: IdentityState::Active {
+                    credentials: vec![Credential::new(b"id", b"key", -7, 0)],
+                },
+            },
+        )
+        .await?;
+        let state = AppState {
+            ps: ps.clone(),
+            is: Arc::new(InviteService::new(
+                ps.clone(),
+                &EmailConfig {
+                    relay_host: "localhost".to_string(),
+                    username: None,
+                    password_file: None,
+                    sender_email: "test@example.com".to_string(),
+                },
+                "http://localhost:8080",
+            )?),
+            templates: Arc::new(Templates::new()?),
+            oidc: Arc::new(OidcService::new(
+                "http://localhost:8080",
+                ps.as_ref().clone(),
+            )),
+            rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+            bypass_authentication: false,
+        };
+        let make_app = |state: AppState| {
+            Router::new()
+                .route("/", get(index_handler))
+                .layer(super::make_session_layer(db.clone()))
+                .with_state(state)
+        };
+        let disabled = make_app(state.clone());
+        let response = disabled
+            .oneshot(Request::builder().uri("/?user=root").body(Body::empty())?)
+            .await?;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let enabled = make_app(AppState {
+            bypass_authentication: true,
+            ..state
+        });
+        let root_login = enabled
+            .clone()
+            .oneshot(Request::builder().uri("/?user=root").body(Body::empty())?)
+            .await?;
+        assert_eq!(root_login.status(), StatusCode::SEE_OTHER);
+        assert_eq!(root_login.headers()[header::LOCATION], "/");
+        let cookie = root_login.headers()[header::SET_COOKIE]
+            .to_str()?
+            .split(';')
+            .next()
+            .unwrap();
+        let admin_page = enabled
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(admin_page.status(), StatusCode::OK);
+        let admin_html =
+            String::from_utf8(to_bytes(admin_page.into_body(), usize::MAX).await?.to_vec())?;
+        assert!(admin_html.contains("id=\"app-form\""));
+
+        let user_login = enabled
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/?user=alice%40example.test")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(user_login.status(), StatusCode::SEE_OTHER);
+        let alice = ps
+            .fetch_identity_by_email("alice@example.test")
+            .await?
+            .unwrap();
+        assert!(!alice.admin);
+        assert!(matches!(alice.state, IdentityState::Active { .. }));
+        let cookie = user_login.headers()[header::SET_COOKIE]
+            .to_str()?
+            .split(';')
+            .next()
+            .unwrap();
+        let denied = enabled
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(denied.status(), StatusCode::OK);
+        let user_html =
+            String::from_utf8(to_bytes(denied.into_body(), usize::MAX).await?.to_vec())?;
+        assert!(!user_html.contains("id=\"app-form\""));
         Ok(())
     }
 }

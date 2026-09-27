@@ -1021,6 +1021,7 @@ mod tests {
                 persistence.as_ref().clone(),
             )),
             rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+            bypass_authentication: false,
         };
         let app = test_app(state, db);
 
@@ -1199,6 +1200,7 @@ mod tests {
                 persistence.as_ref().clone(),
             )),
             rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+            bypass_authentication: false,
         };
         let app = test_app(state, db);
 
@@ -1282,6 +1284,7 @@ mod tests {
                 persistence.as_ref().clone(),
             )),
             rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+            bypass_authentication: false,
         };
         let app = test_app(state, db);
 
@@ -1388,6 +1391,7 @@ mod tests {
                 persistence.as_ref().clone(),
             )),
             rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+            bypass_authentication: false,
         };
         let app = test_app(state, db);
 
