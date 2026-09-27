@@ -192,3 +192,53 @@ strong {
     overflow-wrap: anywhere;
 }
 button:disabled { opacity: 0.6; cursor: wait; }
+
+.admin-main { width: min(100% - 2rem, 70rem); }
+.admin-topbar { display: flex; align-items: baseline; gap: .65rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
+.brand { color: var(--text); text-decoration: none; font: 500 1.55rem "Iowan Old Style", Georgia, serif; white-space: nowrap; }
+.admin-label { color: var(--muted); font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.account-email { margin-left: auto; color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; text-align: right; }
+.admin-nav { display: flex; gap: .2rem; margin: 1rem 0 2rem; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.admin-nav a { padding: .7rem 1rem; border-bottom: 2px solid transparent; color: var(--muted); text-decoration: none; white-space: nowrap; }
+.admin-nav a[aria-current="page"] { color: var(--accent-strong); border-bottom-color: var(--accent); font-weight: 650; }
+.admin-nav a:hover { color: var(--accent-strong); }
+.admin-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.admin-card { display: block; padding: 1.5rem; border: 1px solid var(--border); border-radius: 10px; color: var(--text); text-decoration: none; }
+.admin-card:hover { border-color: var(--accent); }
+.admin-card h2 { margin-bottom: .4rem; }
+.admin-card p { color: var(--muted); }
+.admin-card span { color: var(--accent-strong); font-weight: 650; }
+.admin-page-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+.admin-page-heading h1 { margin-bottom: .5rem; }
+.admin-page-heading button { flex: none; }
+.admin-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 21rem); gap: 1.5rem; align-items: start; }
+.admin-columns:has(> [hidden]) { grid-template-columns: 1fr; }
+.admin-list { border-top: 1px solid var(--border); }
+.admin-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid var(--border); }
+.admin-row-main { flex: 1; min-width: 0; }
+.admin-row h3 { margin: 0; font-size: 1rem; }
+.admin-row p { margin: .15rem 0 0; color: var(--muted); font-size: .88rem; overflow-wrap: anywhere; }
+.admin-row button { flex: none; }
+.admin-row .button-group { margin: 0; }
+.admin-row-select { display: block; width: 100%; padding: 0; border: 0; background: transparent; text-align: left; color: var(--text); font: inherit; cursor: pointer; }
+.admin-row-select[aria-current="true"] h3 { color: var(--accent-strong); }
+.admin-detail { padding: 1.25rem; border: 1px solid var(--border); border-radius: 10px; overflow-wrap: anywhere; }
+.admin-detail[hidden] { display: none; }
+.admin-detail h2 { margin-bottom: .3rem; }
+.admin-detail label { display: block; margin-top: 1rem; font-weight: 650; }
+.admin-detail input, .admin-detail textarea, .admin-detail select { width: 100%; padding: .65rem; border: 1px solid var(--border); border-radius: 8px; background: var(--background); color: var(--text); font: inherit; }
+.admin-detail textarea { resize: vertical; }
+.admin-detail .muted { font-size: .88rem; }
+.admin-detail hr { margin: 1.4rem 0; border: 0; border-top: 1px solid var(--border); }
+.admin-detail ul { padding-left: 0; list-style: none; }
+.admin-detail li { display: flex; justify-content: space-between; align-items: center; gap: .5rem; padding: .45rem 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.admin-detail li button { flex: none; }
+.admin-detail h3 { margin: 0; font-size: 1rem; }
+button.primary { background: var(--accent-strong); color: var(--background); border-color: var(--accent-strong); }
+button.danger { color: var(--danger-text); background: var(--danger-bg); border-color: var(--danger-border); }
+#apps-status:empty, #groups-status:empty { display: none; }
+@media (max-width: 48rem) {
+    .admin-columns, .admin-columns:has(> [hidden]) { grid-template-columns: 1fr; }
+    .admin-cards { grid-template-columns: 1fr; }
+    .admin-page-heading { align-items: start; flex-direction: column; }
+}

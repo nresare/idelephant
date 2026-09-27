@@ -65,6 +65,8 @@ struct IdTokenClaims<'a> {
     auth_time: i64,
     nonce: Option<&'a str>,
     email: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    groups: Option<&'a [String]>,
 }
 
 struct PreparedKey {
@@ -94,6 +96,7 @@ impl OidcService {
                 "openid".to_string(),
                 "email".to_string(),
                 "profile".to_string(),
+                "groups".to_string(),
             ],
             token_endpoint_auth_methods_supported: vec!["none".to_string()],
             claims_supported: vec![
@@ -105,6 +108,7 @@ impl OidcService {
                 "auth_time".to_string(),
                 "nonce".to_string(),
                 "email".to_string(),
+                "groups".to_string(),
             ],
             grant_types_supported: vec!["authorization_code".to_string()],
             code_challenge_methods_supported: vec!["S256".to_string()],
@@ -131,8 +135,9 @@ impl OidcService {
         audience: &str,
         nonce: Option<&str>,
         email: &str,
+        groups: Option<&[String]>,
     ) -> Result<String, IdentityError> {
-        self.mint_id_token_at(subject, audience, nonce, email, Utc::now())
+        self.mint_id_token_at(subject, audience, nonce, email, groups, Utc::now())
             .await
     }
 
@@ -154,6 +159,7 @@ impl OidcService {
         audience: &str,
         nonce: Option<&str>,
         email: &str,
+        groups: Option<&[String]>,
         now: DateTime<Utc>,
     ) -> Result<String, IdentityError> {
         self.reconcile_keys(now).await?;
@@ -175,6 +181,7 @@ impl OidcService {
             auth_time: now.timestamp(),
             nonce,
             email,
+            groups,
         };
         let mut header = Header::new(Algorithm::ES256);
         header.kid = Some(signing_key.kid.clone());
@@ -245,9 +252,10 @@ impl OidcService {
         audience: &str,
         nonce: Option<&str>,
         email: &str,
+        groups: Option<&[String]>,
         now: DateTime<Utc>,
     ) -> Result<String, IdentityError> {
-        self.mint_id_token_at(subject, audience, nonce, email, now)
+        self.mint_id_token_at(subject, audience, nonce, email, groups, now)
             .await
     }
 }
@@ -314,6 +322,7 @@ mod tests {
     use super::{slot_start, OidcService};
     use crate::persistence::{mem_db, PersistenceService};
     use anyhow::Result;
+    use base64::Engine;
     use chrono::{Duration, TimeZone, Utc};
     use jsonwebtoken::decode_header;
 
@@ -327,9 +336,47 @@ mod tests {
                 "client-1",
                 Some("nonce-123"),
                 "alice@example.com",
+                None,
             )
             .await?;
         assert_eq!(token.split('.').count(), 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn groups_claim_is_only_included_when_supplied() -> Result<()> {
+        let db = mem_db().await?;
+        let oidc = OidcService::new("http://localhost:8080", PersistenceService::new(db));
+        let groups = vec!["Engineering".to_string(), "Operations".to_string()];
+        let with_groups = oidc
+            .mint_id_token(
+                "identity:alice",
+                "client-1",
+                None,
+                "alice@example.com",
+                Some(&groups),
+            )
+            .await?;
+        let without_groups = oidc
+            .mint_id_token(
+                "identity:alice",
+                "client-1",
+                None,
+                "alice@example.com",
+                None,
+            )
+            .await?;
+        let claims = |token: &str| -> Result<serde_json::Value> {
+            let payload = token.split('.').nth(1).unwrap();
+            Ok(serde_json::from_slice(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload)?,
+            )?)
+        };
+        assert_eq!(
+            claims(&with_groups)?["groups"],
+            serde_json::json!(["Engineering", "Operations"])
+        );
+        assert!(claims(&without_groups)?.get("groups").is_none());
         Ok(())
     }
 
@@ -394,6 +441,7 @@ mod tests {
                 "client-1",
                 Some("nonce-123"),
                 "alice@example.com",
+                None,
                 now,
             )
             .await?;

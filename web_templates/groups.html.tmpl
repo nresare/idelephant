@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Groups · idElephant</title>
+<link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+<main class="admin-main">
+<header class="admin-topbar"><a class="brand" href="/">idElephant 🐘</a><span class="admin-label">Admin</span><span class="account-email">{{identity.email}}</span></header>
+<nav class="admin-nav" aria-label="Admin pages"><a href="/">Overview</a><a href="/admin/apps">App registrations</a><a aria-current="page" href="/admin/groups">Groups</a></nav>
+<div id="error-box" class="error-box" hidden role="alert" aria-live="polite"><button id="error-close" class="error-close" type="button" aria-label="Close error message">×</button><div id="error-message"></div></div>
+<section class="admin-page-heading"><div><p class="eyebrow">Administration</p><h1>Groups</h1><p class="lede">Create groups, describe their purpose, and choose who belongs to each one.</p></div><button id="group-new" type="button" class="primary">New group</button></section>
+<p id="groups-status" role="status" aria-live="polite"></p>
+<div class="admin-columns"><div id="groups-list" class="admin-list"></div><aside class="admin-detail" id="group-detail"></aside></div>
+</main>
+<script src="/static/script.js"></script><script src="/static/groups.js"></script>
+<script>document.getElementById("error-close").addEventListener("click", hideError)</script>
+</body>
+</html>

@@ -8,16 +8,27 @@
 </head>
 <body>
 <main>
+{{#if admin}}
+<header class="admin-topbar"><a class="brand" href="/">idElephant 🐘</a><span class="admin-label">Admin</span><span class="account-email">{{identity.email}}</span></header>
+<nav class="admin-nav" aria-label="Admin pages"><a aria-current="page" href="/">Overview</a><a href="/admin/apps">App registrations</a><a href="/admin/groups">Groups</a></nav>
+{{/if}}
 <section class="hero">
 <p class="eyebrow">Your favourite identity provider</p>
 {{#if identity}}
 <h1>Welcome back</h1>
-<p class="lede">You are signed in as <strong>{{identity.email}}</strong>.</p>
+<p class="lede">You are signed in as <strong>{{identity.email}}</strong>.{{#if admin}} Choose what you would like to manage.{{/if}}</p>
 {{else}}
 <h1>idElephant 🐘</h1>
 <p class="lede">If you don't have an account, talk to admin to get invited.</p>
 {{/if}}
 </section>
+
+{{#if admin}}
+<section class="admin-cards" aria-label="Administration">
+<a class="admin-card" href="/admin/apps"><h2>App registrations</h2><p>Register sign-in clients, edit redirect URIs, and retire apps.</p><span>Manage apps →</span></a>
+<a class="admin-card" href="/admin/groups"><h2>Groups</h2><p>Organize people into groups and manage membership.</p><span>Manage groups →</span></a>
+</section>
+{{/if}}
 
 <section class="panel" aria-labelledby="session-title">
 <div id="error-box" class="error-box" hidden role="alert" aria-live="polite">
@@ -32,28 +43,6 @@
 <p class="action-row"><input id="authenticate" type="submit" value="log in"></p>
 {{/if}}
 </section>
-{{#if admin}}
-<section class="panel" aria-labelledby="apps-title">
-<h2 id="apps-title">App registrations</h2>
-<p class="muted">Manage the apps that can use idElephant for sign-in.</p>
-<p id="apps-status" role="status" aria-live="polite"></p>
-<div id="apps-list"></div>
-<h3 id="app-form-title">Register an app</h3>
-<form id="app-form">
-<label for="app-client-id">Client ID</label>
-<input id="app-client-id" name="client_id" required>
-<label for="app-name">App name</label>
-<input id="app-name" name="name" required>
-<label for="app-redirects">Redirect URIs (one per line)</label>
-<textarea id="app-redirects" name="redirect_uris" rows="4" required aria-describedby="redirect-help"></textarea>
-<p id="redirect-help" class="muted">Enter the exact callback URLs used by your app.</p>
-<div class="button-group">
-<button id="app-save" type="submit">Register app</button>
-<button id="app-cancel" type="button" hidden>Cancel editing</button>
-</div>
-</form>
-</section>
-{{/if}}
 </main>
 <script src="/static/script.js"></script>
 <script>
@@ -65,6 +54,5 @@ document.getElementById("logout").addEventListener("click", logout)
 document.getElementById("authenticate").addEventListener("click", authenticate)
 {{/if}}
 </script>
-{{#if admin}}<script src="/static/apps.js"></script>{{/if}}
 </body>
 </html>

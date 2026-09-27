@@ -100,6 +100,8 @@ struct TokenResponse {
 struct UserinfoResponse {
     sub: String,
     email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    groups: Option<Vec<String>>,
 }
 
 async fn create_oauth_client(
@@ -143,7 +145,7 @@ pub(crate) async fn current_admin(
         }))
 }
 
-async fn require_admin(
+pub(crate) async fn require_admin(
     session: &Session,
     persistence: &PersistenceService,
 ) -> Result<(), IdentityError> {
@@ -389,6 +391,15 @@ async fn token(
                     "authorization code references unknown identity".to_string(),
                 )
             })?;
+        let groups = if code.scopes.iter().any(|scope| scope == "groups") {
+            Some(
+                persistence_service
+                    .group_names_for_user(&code.subject_id)
+                    .await?,
+            )
+        } else {
+            None
+        };
         Some(
             oidc_service
                 .mint_id_token(
@@ -396,6 +407,7 @@ async fn token(
                     &code.client_id,
                     code.nonce.as_deref(),
                     &identity.email,
+                    groups.as_deref(),
                 )
                 .await?,
         )
@@ -430,9 +442,19 @@ async fn userinfo(
         .fetch_identity(&access_token.subject_id)
         .await?
         .ok_or_else(|| IdentityError::BadRequest("Unknown identity".to_string()))?;
+    let groups = if access_token.scopes.iter().any(|scope| scope == "groups") {
+        Some(
+            persistence_service
+                .group_names_for_user(&access_token.subject_id)
+                .await?,
+        )
+    } else {
+        None
+    };
     Ok(axum::Json(UserinfoResponse {
         sub: access_token.subject_id,
         email: identity.email,
+        groups,
     }))
 }
 
@@ -505,6 +527,7 @@ async fn continue_authorization(
             "identity_email": identity.email,
             "scopes": pending.scopes,
             "requests_email": pending.scopes.iter().any(|scope| scope == "email"),
+            "requests_groups": pending.scopes.iter().any(|scope| scope == "groups"),
         }),
     )?;
     Ok(Html(body).into_response())
@@ -631,8 +654,8 @@ fn validate_client_registration_request(
     Ok(())
 }
 
-fn allowed_scopes() -> [&'static str; 3] {
-    ["openid", "profile", "email"]
+fn allowed_scopes() -> [&'static str; 4] {
+    ["openid", "profile", "email", "groups"]
 }
 
 fn verify_pkce(code_verifier: &str, expected_challenge: &str) -> bool {
@@ -715,7 +738,7 @@ mod tests {
     use base64::Engine;
     use chrono::{Duration, Utc};
     use serde::Deserialize;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
     use std::sync::Arc;
     use surrealdb::types::RecordId;
@@ -968,6 +991,10 @@ mod tests {
         let mut alice = persistence.fetch_identity(&user_id).await?.unwrap();
         alice.admin = false;
         persistence.update_identity(&alice).await?;
+        let group = persistence
+            .create_group("Engineering", "Builds the product")
+            .await?;
+        persistence.add_group_member(&group.id()?, &user_id).await?;
         persistence
             .create_oauth_client(
                 "client-1",
@@ -1038,7 +1065,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&scope=openid%20email&state=state-123&nonce=nonce-123&code_challenge={challenge}&code_challenge_method=S256"
+                        "/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&scope=openid%20email%20groups&state=state-123&nonce=nonce-123&code_challenge={challenge}&code_challenge_method=S256"
                     ))
                     .header(header::COOKIE, &cookie)
                     .body(Body::empty())?,
@@ -1048,6 +1075,7 @@ mod tests {
         let authorize_body = String::from_utf8(response_body(authorize).await)?;
         assert!(authorize_body
             .contains("Example client</strong> wants to use this service for logins."));
+        assert!(authorize_body.contains("requesting your group memberships"));
 
         let consent = app
             .clone()
@@ -1089,6 +1117,15 @@ mod tests {
         let token_json: TokenJson = serde_json::from_slice(&response_body(token).await)?;
         assert!(!token_json.access_token.is_empty());
         assert_eq!(token_json.id_token.as_ref().unwrap().split('.').count(), 3);
+        let payload = token_json
+            .id_token
+            .as_ref()
+            .unwrap()
+            .split('.')
+            .nth(1)
+            .unwrap();
+        let claims: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload)?)?;
+        assert_eq!(claims["groups"], json!(["Engineering"]));
 
         let userinfo = app
             .clone()
@@ -1109,6 +1146,7 @@ mod tests {
             userinfo_json["email"],
             Value::String("alice@example.com".to_string())
         );
+        assert_eq!(userinfo_json["groups"], json!(["Engineering"]));
 
         Ok(())
     }
