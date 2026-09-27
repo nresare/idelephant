@@ -8,15 +8,17 @@
     const title = document.getElementById("app-form-title");
     const status = document.getElementById("apps-status");
     const list = document.getElementById("apps-list");
+    const editor = document.getElementById("app-editor");
+    const newButton = document.getElementById("app-new");
     let editing = false;
 
     function reset() {
         form.reset();
         editing = false;
         clientId.readOnly = false;
-        cancel.hidden = true;
         title.textContent = "Register an app";
         save.textContent = "Register app";
+        editor.hidden = true;
     }
 
     async function request(method, body) {
@@ -40,17 +42,15 @@
         if (!apps.length) list.textContent = "No apps registered yet.";
         for (const app of apps) {
             const card = document.createElement("article");
-            card.className = "app-card";
+            card.className = "admin-row";
+            const content = document.createElement("div");
+            content.className = "admin-row-main";
             const heading = document.createElement("h3");
             heading.textContent = app.name;
             const id = document.createElement("p");
             id.textContent = `Client ID: ${app.client_id}`;
-            const uris = document.createElement("ul");
-            for (const uri of app.redirect_uris) {
-                const item = document.createElement("li");
-                item.textContent = uri;
-                uris.append(item);
-            }
+            const uris = document.createElement("p");
+            uris.textContent = app.redirect_uris.join(" · ");
             const actions = document.createElement("div");
             actions.className = "button-group";
             const edit = document.createElement("button");
@@ -63,7 +63,7 @@
                 redirects.value = app.redirect_uris.join("\n");
                 title.textContent = "Edit app";
                 save.textContent = "Save changes";
-                cancel.hidden = false;
+                editor.hidden = false;
                 name.focus();
             };
             const remove = document.createElement("button");
@@ -81,11 +81,17 @@
                 finally { remove.disabled = false; }
             };
             actions.append(edit, remove);
-            card.append(heading, id, uris, actions);
+            content.append(heading, id, uris);
+            card.append(content, actions);
             list.append(card);
         }
     }
 
+    newButton.onclick = () => {
+        reset();
+        editor.hidden = false;
+        clientId.focus();
+    };
     cancel.onclick = reset;
     form.onsubmit = async (event) => {
         event.preventDefault();

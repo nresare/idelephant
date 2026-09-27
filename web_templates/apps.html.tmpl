@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>App registrations · idElephant</title>
+<link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+<main class="admin-main">
+<header class="admin-topbar"><a class="brand" href="/">idElephant 🐘</a><span class="admin-label">Admin</span><span class="account-email">{{identity.email}}</span></header>
+<nav class="admin-nav" aria-label="Admin pages"><a href="/">Overview</a><a aria-current="page" href="/admin/apps">App registrations</a><a href="/admin/groups">Groups</a></nav>
+<div id="error-box" class="error-box" hidden role="alert" aria-live="polite"><button id="error-close" class="error-close" type="button" aria-label="Close error message">×</button><div id="error-message"></div></div>
+<section class="admin-page-heading"><div><p class="eyebrow">Administration</p><h1>App registrations</h1><p class="lede">Manage the apps that can use idElephant for sign-in.</p></div><button id="app-new" type="button" class="primary">Register app</button></section>
+<p id="apps-status" role="status" aria-live="polite"></p>
+<div class="admin-columns" id="apps-columns"><div id="apps-list" class="admin-list"></div>
+<aside class="admin-detail" id="app-editor" hidden>
+<h2 id="app-form-title">Register an app</h2>
+<p class="muted">Client ID stays fixed after registration.</p>
+<form id="app-form">
+<label for="app-client-id">Client ID</label>
+<input id="app-client-id" name="client_id" required>
+<label for="app-name">App name</label>
+<input id="app-name" name="name" required>
+<label for="app-redirects">Redirect URIs</label>
+<textarea id="app-redirects" name="redirect_uris" rows="4" required aria-describedby="redirect-help"></textarea>
+<p id="redirect-help" class="muted">Enter one exact callback URL per line.</p>
+<div class="button-group"><button id="app-save" class="primary" type="submit">Register app</button><button id="app-cancel" type="button">Cancel</button></div>
+</form>
+</aside></div>
+</main>
+<script src="/static/script.js"></script><script src="/static/apps.js"></script>
+<script>document.getElementById("error-close").addEventListener("click", hideError)</script>
+</body>
+</html>

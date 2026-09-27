@@ -28,10 +28,24 @@ but I have a plan and I think that the other pieces will come.
 
 ## Managing app registrations
 
-Sign in with an admin account to see **App registrations** on the home page. You can
+Sign in with an admin account and open **App registrations** from the admin navigation. You can
 register apps with a unique client ID, a display name, and one redirect URI per line.
 Existing apps can be edited or deleted; client IDs stay fixed when editing.
 Deleting an app also revokes its stored access tokens, authorization codes, and consents.
+
+## Managing groups
+
+Admins can open **Groups** to create groups with a name and description, edit or delete
+them, and add or remove existing users. Deleting a group removes its memberships but
+does not delete its users.
+
+OIDC clients may request the `groups` scope alongside `openid`. After consent, the
+ID token contains a `groups` array of the user's current group names (including an
+empty array when the user is not in any groups). The same claim is available from
+`/userinfo` for access tokens granted the `groups` scope. Without that scope, the
+claim is omitted. Membership is read when each response is generated, so an ID
+token reflects membership at issuance time while `/userinfo` reflects current
+membership.
 
 ## License
 

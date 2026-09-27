@@ -18,6 +18,8 @@ impl Templates {
         registry.register_template("accept", WebTemplates::compile("accept.html.tmpl")?);
         registry.register_template("authorize", WebTemplates::compile("authorize.html.tmpl")?);
         registry.register_template("index", WebTemplates::compile("index.html.tmpl")?);
+        registry.register_template("apps", WebTemplates::compile("apps.html.tmpl")?);
+        registry.register_template("groups", WebTemplates::compile("groups.html.tmpl")?);
         Ok(Self {
             registry: Arc::new(registry),
         })
@@ -49,7 +51,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn app_management_is_only_rendered_for_admins() {
+    fn admin_navigation_is_only_rendered_for_admins() {
         let templates = Templates::new().unwrap();
         for admin in [false, true] {
             let html = templates
@@ -60,10 +62,14 @@ mod tests {
                     }),
                 )
                 .unwrap();
-            assert_eq!(html.contains("id=\"app-form\""), admin);
-            assert_eq!(html.contains("/static/apps.js"), admin);
+            assert_eq!(html.contains("href=\"/admin/apps\""), admin);
+            assert_eq!(html.contains("href=\"/admin/groups\""), admin);
         }
         let html = templates.render("index", &json!({})).unwrap();
-        assert!(!html.contains("id=\"app-form\""));
+        assert!(!html.contains("href=\"/admin/apps\""));
+        let apps = templates
+            .render("apps", &json!({"identity": {"email": "admin@example.com"}}))
+            .unwrap();
+        assert!(apps.contains("id=\"app-editor\" hidden"));
     }
 }

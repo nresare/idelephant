@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod embed;
 mod error;
+mod groups;
 mod idmouse;
 mod invite;
 mod later;
@@ -123,6 +124,8 @@ async fn run() -> Result<(), Fatal> {
 
     let app = Router::new()
         .route("/", get(index_handler))
+        .route("/admin/apps", get(admin_apps_handler))
+        .route("/admin/groups", get(admin_groups_handler))
         .route("/healthz", get(healthz_handler))
         .route("/static/{*path}", get(static_handler))
         .route("/logout", get(logout_handler))
@@ -130,6 +133,7 @@ async fn run() -> Result<(), Fatal> {
         .merge(auth_routes())
         .merge(invite_routes())
         .merge(oauth_routes())
+        .merge(groups::group_routes())
         .fallback_service(get(not_found))
         .layer(session_layer)
         .layer(
@@ -213,6 +217,39 @@ async fn index_handler(
         "index",
         &json!({"identity": id, "admin": oauth::current_admin(&session, &ps).await?, "pending_authorization": pending_authorization}),
     )?))
+}
+
+async fn admin_page(
+    page: &str,
+    session: Session,
+    ps: PersistenceService,
+    templates: Templates,
+) -> Result<Html<String>, IdentityError> {
+    if !oauth::current_admin(&session, &ps).await? {
+        return Err(IdentityError::Unauthorized(
+            "An active admin login is required".to_string(),
+        ));
+    }
+    let identity: Option<Identity> = session.get(IDENTITY).await?;
+    Ok(Html(
+        templates.render(page, &json!({ "identity": identity }))?,
+    ))
+}
+
+async fn admin_apps_handler(
+    State(ps): State<PersistenceService>,
+    State(templates): State<Templates>,
+    session: Session,
+) -> Result<Html<String>, IdentityError> {
+    admin_page("apps", session, ps, templates).await
+}
+
+async fn admin_groups_handler(
+    State(ps): State<PersistenceService>,
+    State(templates): State<Templates>,
+    session: Session,
+) -> Result<Html<String>, IdentityError> {
+    admin_page("groups", session, ps, templates).await
 }
 
 async fn logout_handler(session: Session) -> Result<StatusCode, IdentityError> {
