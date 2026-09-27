@@ -26,9 +26,10 @@ cargo run -- --bypass-authentication -c local-dev/idelephant.toml
 
 The script starts a database on `127.0.0.1:8001`, creates a database user named
 `idelephant`, and writes its password to `local-dev/idelephant-password`. The
-generated config points to that file. It also creates a SurrealDB root administrator
-named `local_admin`, whose password is in `local-dev/root-password`. These files and
-the database are excluded from Git. Run `./local-dev/local-db.sh stop` when finished.
+checked in config points to that file. It also creates a SurrealDB root administrator
+named `local_admin`, whose password is in `local-dev/root-password`. The passwords,
+database data, logs, and process files are excluded from Git. Run
+`./local-dev/local-db.sh stop` when finished.
 
 To inspect the database as its administrator:
 

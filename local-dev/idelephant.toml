@@ -1,0 +1,11 @@
+root_key = "zq.luDCkyil5qf1qCJwm5lnSe97x5mROvXUMfwpOASJ0MgalZTIj"
+origin = "http://127.0.0.1:8080"
+
+[email]
+sender_email = "admin@example.test"
+relay_host = "localhost"
+
+[persistence]
+uri = "ws://127.0.0.1:8001"
+username = "idelephant"
+password_file = "local-dev/idelephant-password"
