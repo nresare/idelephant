@@ -6,6 +6,8 @@ use std::path::Path;
 pub struct Config {
     pub origin: String,
     pub root_key: String,
+    #[serde(default)]
+    pub bypass_authentication: bool,
     #[serde(rename = "email")]
     pub email_config: EmailConfig,
     pub persistence: PersistenceConfig,
@@ -72,4 +74,29 @@ fn read_secret_file(path: &Path) -> Result<String, Error> {
     let len = secret.trim_end_matches(['\r', '\n']).len();
     secret.truncate(len);
     Ok(secret)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn bypass_authentication_defaults_to_disabled_and_can_be_enabled() {
+        let config = r#"
+origin = "http://localhost:8080"
+root_key = "test-key"
+
+[email]
+relay_host = "localhost"
+sender_email = "admin@example.test"
+
+[persistence]
+uri = "ws://localhost:8001"
+"#;
+        let disabled: Config = toml::from_str(config).unwrap();
+        assert!(!disabled.bypass_authentication);
+
+        let enabled: Config = toml::from_str(&format!("bypass_authentication = true\n{config}")).unwrap();
+        assert!(enabled.bypass_authentication);
+    }
 }

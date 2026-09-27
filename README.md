@@ -20,7 +20,7 @@ but I have a plan and I think that the other pieces will come.
 Install the SurrealDB CLI and run:
 
 ```sh
-./scripts/local-db.sh start
+./local-dev/local-db.sh start
 cargo run -- --bypass-authentication -c local-dev/idelephant.toml
 ```
 
@@ -28,7 +28,7 @@ The script starts a database on `127.0.0.1:8001`, creates a database user named
 `idelephant`, and writes its password to `local-dev/idelephant-password`. The
 generated config points to that file. It also creates a SurrealDB root administrator
 named `local_admin`, whose password is in `local-dev/root-password`. These files and
-the database are excluded from Git. Run `./scripts/local-db.sh stop` when finished.
+the database are excluded from Git. Run `./local-dev/local-db.sh stop` when finished.
 
 To inspect the database as its administrator:
 
@@ -38,9 +38,10 @@ To inspect the database as its administrator:
   surreal sql --endpoint ws://127.0.0.1:8001 --namespace default --database idelephant)
 ```
 
-With `--bypass-authentication`, open `http://127.0.0.1:8080/?user=root` to sign in as
+With `--bypass-authentication` (or `bypass_authentication = true` in the config file),
+open `http://127.0.0.1:8080/?user=root` to sign in as
 the built-in app administrator. `/?user=alice@example.test` signs in as an existing
-user with that email, or creates a non-admin test user on first use. The flag only
+user with that email, or creates a non-admin test user on first use. Bypass mode only
 works with a loopback `origin` and database URI, and makes the app listen on
 `127.0.0.1`.
 
