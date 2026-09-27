@@ -96,7 +96,8 @@ uri = "ws://localhost:8001"
         let disabled: Config = toml::from_str(config).unwrap();
         assert!(!disabled.bypass_authentication);
 
-        let enabled: Config = toml::from_str(&format!("bypass_authentication = true\n{config}")).unwrap();
+        let enabled: Config =
+            toml::from_str(&format!("bypass_authentication = true\n{config}")).unwrap();
         assert!(enabled.bypass_authentication);
     }
 }

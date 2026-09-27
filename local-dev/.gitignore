@@ -1,7 +1,6 @@
 /database/
 /root-password
 /idelephant-password
-/idelephant.toml
 /surreal.pid
 /surreal.log
 /history.txt

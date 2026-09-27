@@ -287,6 +287,7 @@ mod tests {
                 ps.as_ref().clone(),
             )),
             rs: Arc::new(RegistrationService::new("http://localhost:8080")?),
+            bypass_authentication: false,
         };
         let app = Router::new()
             .route("/test-login", get(login))

@@ -500,7 +500,8 @@ mod tests {
         assert_eq!(admin_page.status(), StatusCode::OK);
         let admin_html =
             String::from_utf8(to_bytes(admin_page.into_body(), usize::MAX).await?.to_vec())?;
-        assert!(admin_html.contains("id=\"app-form\""));
+        assert!(admin_html.contains("href=\"/admin/apps\""));
+        assert!(admin_html.contains("href=\"/admin/groups\""));
 
         let user_login = enabled
             .clone()

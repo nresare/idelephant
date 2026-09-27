@@ -55,24 +55,9 @@ start_server() {
     [[ -f "$root_password_file" ]] || openssl rand -hex 32 > "$root_password_file"
     [[ -f "$app_password_file" ]] || openssl rand -hex 32 > "$app_password_file"
 
-    local root_key root_password app_password
-    root_key="$(sed -n 's/^root_key[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$repo_dir/idelephant.toml" | head -n 1)"
-    [[ -n "$root_key" ]] || { echo "Could not find root_key in idelephant.toml." >&2; exit 1; }
+    local root_password app_password
     root_password="$(cat "$root_password_file")"
     app_password="$(cat "$app_password_file")"
-    cat > "$config_file" <<CONFIG
-root_key = "$root_key"
-origin = "http://127.0.0.1:8080"
-
-[email]
-sender_email = "admin@example.test"
-relay_host = "localhost"
-
-[persistence]
-uri = "$endpoint"
-username = "idelephant"
-password_file = "$app_password_file"
-CONFIG
 
     SURREAL_USER=local_admin SURREAL_PASS="$root_password" \
         nohup surreal start --no-banner --bind 127.0.0.1:8001 \
