@@ -2,6 +2,7 @@
 name = "id.noa.re"
 namespace = "idelephant"
 replicas = 1
+tls = true
 args = ["-c", "/config/idelephant.toml"]
 custom-token-audiences = ["idmouse"]
 external-secrets = [
