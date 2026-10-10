@@ -46,6 +46,29 @@ user with that email, or creates a non-admin test user on first use. Bypass mode
 works with a loopback `origin` and database URI, and makes the app listen on
 `127.0.0.1`.
 
+## HTTPS and HTTP/2
+
+Set both top-level PEM paths in the application config to serve HTTPS on port 8443:
+
+```toml
+tls_cert_path = "tls/cert.pem"
+tls_key_path = "tls/key.pem"
+```
+
+Relative paths resolve from the configuration file's directory. Supply a certificate
+chain and its matching unencrypted private key. Incomplete settings or unreadable,
+invalid, or mismatched files prevent startup. TLS advertises `h2` and `http/1.1`
+through ALPN. Omit both paths to keep HTTP on port 8080.
+
+`origin` remains the public URL used for authentication. For direct local HTTPS,
+set it to `https://localhost:8443`. Restart after replacing the certificate files.
+
+The `.deploy` website block sets `tls = true`, generating a cluster-local
+certificate and mounting its Secret at `/tls`. The app reads `/tls/tls.crt` and
+`/tls/tls.key`. Service port 443 targets container port 8443, and health checks use
+HTTPS. The generated BackendTLSPolicy validates the service hostname against the
+`cluster-local-ca` ConfigMap distributed to the labeled namespace.
+
 ## Managing app registrations
 
 Sign in with an admin account and open **App registrations** from the admin navigation. You can

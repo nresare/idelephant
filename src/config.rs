@@ -8,6 +8,8 @@ pub struct Config {
     pub root_key: String,
     #[serde(default)]
     pub bypass_authentication: bool,
+    pub tls_cert_path: Option<String>,
+    pub tls_key_path: Option<String>,
     #[serde(rename = "email")]
     pub email_config: EmailConfig,
     pub persistence: PersistenceConfig,

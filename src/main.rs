@@ -11,6 +11,7 @@ mod oidc;
 mod persistence;
 mod register;
 mod root_setup;
+mod tls;
 mod util;
 mod web;
 
@@ -109,7 +110,14 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-const ADDR: SocketAddr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 8080, 0, 0));
+fn listen_address(tls_enabled: bool, bypass_authentication: bool) -> SocketAddr {
+    let port = if tls_enabled { 8443 } else { 8080 };
+    if bypass_authentication {
+        SocketAddr::from((Ipv4Addr::LOCALHOST, port))
+    } else {
+        SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0))
+    }
+}
 
 async fn run() -> Result<(), Fatal> {
     let cli = Cli::parse();
@@ -122,8 +130,8 @@ async fn run() -> Result<(), Fatal> {
     let config = std::fs::read_to_string(&cli.config_path)
         .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e.into()))?;
 
-    let mut config: Config =
-        toml::from_str(&config).map_err(|e| Fatal::ReadConfigFile(cli.config_path, e.into()))?;
+    let mut config: Config = toml::from_str(&config)
+        .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e.into()))?;
     config.bypass_authentication |= cli.bypass_authentication;
     if config.bypass_authentication && !is_loopback_url(&config.origin) {
         return Err(Fatal::BypassRequiresLoopbackOrigin);
@@ -131,6 +139,9 @@ async fn run() -> Result<(), Fatal> {
     if config.bypass_authentication && !is_loopback_url(&config.persistence.uri) {
         return Err(Fatal::BypassRequiresLoopbackDatabase);
     }
+    let tls_config = tls::load(&config, std::path::Path::new(&cli.config_path))
+        .await
+        .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e))?;
 
     let later = LaterService::new();
     let db = make_db(&config.persistence, later)
@@ -161,22 +172,25 @@ async fn run() -> Result<(), Fatal> {
         )
         .with_state(state);
 
-    let addr = if config.bypass_authentication {
-        SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))
-    } else {
-        ADDR
-    };
+    let addr = listen_address(tls_config.is_some(), config.bypass_authentication);
     info!(
         ?addr,
         bypass_authentication = config.bypass_authentication,
         "listening"
     );
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| Fatal::Listen(addr, e))?;
-    axum::serve(listener, app.into_make_service())
-        .await
-        .map_err(|e| Fatal::Other(e.into()))?;
+    if let Some(tls_config) = tls_config {
+        axum_server::bind_rustls(addr, tls_config)
+            .serve(app.into_make_service())
+            .await
+            .map_err(|e| Fatal::Listen(addr, e))?;
+    } else {
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|e| Fatal::Listen(addr, e))?;
+        axum::serve(listener, app.into_make_service())
+            .await
+            .map_err(|e| Fatal::Other(e.into()))?;
+    }
     Ok(())
 }
 
