@@ -36,7 +36,7 @@ use serde::Deserialize;
 use serde_json::json;
 use ssh_key::HashAlg;
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::Arc;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
@@ -113,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
 fn listen_address(tls_enabled: bool, bypass_authentication: bool) -> SocketAddr {
     let port = if tls_enabled { 8443 } else { 8080 };
     if bypass_authentication {
-        SocketAddr::from((Ipv4Addr::LOCALHOST, port))
+        SocketAddr::from(([127, 0, 0, 1], port))
     } else {
         SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0))
     }
@@ -130,18 +130,17 @@ async fn run() -> Result<(), Fatal> {
     let config = std::fs::read_to_string(&cli.config_path)
         .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e.into()))?;
 
-    let mut config: Config = toml::from_str(&config)
+    let config: Config = toml::from_str(&config)
         .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e.into()))?;
-    config.bypass_authentication |= cli.bypass_authentication;
-    if config.bypass_authentication && !is_loopback_url(&config.origin) {
-        return Err(Fatal::BypassRequiresLoopbackOrigin);
-    }
-    if config.bypass_authentication && !is_loopback_url(&config.persistence.uri) {
-        return Err(Fatal::BypassRequiresLoopbackDatabase);
-    }
     let tls_config = tls::load(&config, std::path::Path::new(&cli.config_path))
         .await
         .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e))?;
+    if cli.bypass_authentication && !is_loopback_url(&config.origin) {
+        return Err(Fatal::BypassRequiresLoopbackOrigin);
+    }
+    if cli.bypass_authentication && !is_loopback_url(&config.persistence.uri) {
+        return Err(Fatal::BypassRequiresLoopbackDatabase);
+    }
 
     let later = LaterService::new();
     let db = make_db(&config.persistence, later)
@@ -149,7 +148,7 @@ async fn run() -> Result<(), Fatal> {
         .map_err(|e| Fatal::DbSetup(e.into()))?;
 
     let session_layer = make_session_layer(db.clone(), config.session_timeout);
-    let state = build_app_state(&config, db).await?;
+    let state = build_app_state(&config, db, cli.bypass_authentication).await?;
 
     let app = Router::new()
         .route("/", get(index_handler))
@@ -172,10 +171,10 @@ async fn run() -> Result<(), Fatal> {
         )
         .with_state(state);
 
-    let addr = listen_address(tls_config.is_some(), config.bypass_authentication);
+    let addr = listen_address(tls_config.is_some(), cli.bypass_authentication);
     info!(
         ?addr,
-        bypass_authentication = config.bypass_authentication,
+        bypass_authentication = cli.bypass_authentication,
         "listening"
     );
     if let Some(tls_config) = tls_config {
@@ -206,7 +205,11 @@ fn is_loopback_url(origin: &str) -> bool {
     }
 }
 
-async fn build_app_state(config: &Config, db: Arc<Surreal<Any>>) -> Result<AppState, Fatal> {
+async fn build_app_state(
+    config: &Config,
+    db: Arc<Surreal<Any>>,
+    bypass_authentication: bool,
+) -> Result<AppState, Fatal> {
     let ps = Arc::new(PersistenceService::new(db));
     let rs = Arc::new(
         RegistrationService::new(&config.origin)
@@ -233,7 +236,7 @@ async fn build_app_state(config: &Config, db: Arc<Surreal<Any>>) -> Result<AppSt
         templates,
         oidc,
         rs,
-        bypass_authentication: config.bypass_authentication,
+        bypass_authentication,
     };
     Ok(state)
 }
@@ -381,14 +384,14 @@ async fn not_found() -> (StatusCode, Html<&'static str>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{healthz_handler, index_handler, is_loopback_url, AppState};
+    use super::{admin_apps_handler, healthz_handler, index_handler, is_loopback_url, AppState};
     use crate::config::EmailConfig;
     use crate::invite::InviteService;
     use crate::oidc::OidcService;
     use crate::persistence::{mem_db, Credential, Identity, IdentityState, PersistenceService};
     use crate::register::RegistrationService;
     use crate::web::Templates;
-    use axum::body::{to_bytes, Body};
+    use axum::body::Body;
     use axum::http::{header, Request, StatusCode};
     use axum::routing::get;
     use axum::Router;
@@ -481,6 +484,7 @@ mod tests {
         let make_app = |state: AppState| {
             Router::new()
                 .route("/", get(index_handler))
+                .route("/admin/apps", get(admin_apps_handler))
                 .layer(super::make_session_layer(
                     db.clone(),
                     time::Duration::hours(1),
@@ -512,16 +516,12 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/")
+                    .uri("/admin/apps")
                     .header(header::COOKIE, cookie)
                     .body(Body::empty())?,
             )
             .await?;
         assert_eq!(admin_page.status(), StatusCode::OK);
-        let admin_html =
-            String::from_utf8(to_bytes(admin_page.into_body(), usize::MAX).await?.to_vec())?;
-        assert!(admin_html.contains("href=\"/admin/apps\""));
-        assert!(admin_html.contains("href=\"/admin/groups\""));
 
         let user_login = enabled
             .clone()
@@ -546,15 +546,12 @@ mod tests {
         let denied = enabled
             .oneshot(
                 Request::builder()
-                    .uri("/")
+                    .uri("/admin/apps")
                     .header(header::COOKIE, cookie)
                     .body(Body::empty())?,
             )
             .await?;
-        assert_eq!(denied.status(), StatusCode::OK);
-        let user_html =
-            String::from_utf8(to_bytes(denied.into_body(), usize::MAX).await?.to_vec())?;
-        assert!(!user_html.contains("id=\"app-form\""));
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
         Ok(())
     }
 }

@@ -1,6 +1,6 @@
 root_key = "zq.luDCkyil5qf1qCJwm5lnSe97x5mROvXUMfwpOASJ0MgalZTIj"
 
-db_path = "/tmp/db"
+#db_path = "/tmp/db"
 
 origin = "http://localhost:8080"
 
