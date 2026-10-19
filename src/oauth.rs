@@ -954,7 +954,10 @@ mod tests {
                 get(test_pending_authorization),
             )
             .merge(crate::oauth::oauth_routes())
-            .layer(crate::make_session_layer(db.clone()))
+            .layer(crate::make_session_layer(
+                db.clone(),
+                time::Duration::hours(1),
+            ))
             .with_state(state)
     }
 

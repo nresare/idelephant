@@ -148,7 +148,7 @@ async fn run() -> Result<(), Fatal> {
         .await
         .map_err(|e| Fatal::DbSetup(e.into()))?;
 
-    let session_layer = make_session_layer(db.clone());
+    let session_layer = make_session_layer(db.clone(), config.session_timeout);
     let state = build_app_state(&config, db).await?;
 
     let app = Router::new()
@@ -238,10 +238,13 @@ async fn build_app_state(config: &Config, db: Arc<Surreal<Any>>) -> Result<AppSt
     Ok(state)
 }
 
-fn make_session_layer(db: Arc<Surreal<Any>>) -> SessionManagerLayer<SurrealSessionStore<Any>> {
+fn make_session_layer(
+    db: Arc<Surreal<Any>>,
+    timeout: Duration,
+) -> SessionManagerLayer<SurrealSessionStore<Any>> {
     let session_store = SurrealSessionStore::new(db, "sessions".to_string());
     SessionManagerLayer::new(session_store)
-        .with_expiry(Expiry::OnInactivity(Duration::hours(1)))
+        .with_expiry(Expiry::OnInactivity(timeout))
         .with_same_site(SameSite::Lax)
         .with_secure(false)
 }
@@ -478,7 +481,10 @@ mod tests {
         let make_app = |state: AppState| {
             Router::new()
                 .route("/", get(index_handler))
-                .layer(super::make_session_layer(db.clone()))
+                .layer(super::make_session_layer(
+                    db.clone(),
+                    time::Duration::hours(1),
+                ))
                 .with_state(state)
         };
         let disabled = make_app(state.clone());

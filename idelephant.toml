@@ -4,6 +4,9 @@ db_path = "/tmp/db"
 
 origin = "http://localhost:8080"
 
+# Login session inactivity timeout; defaults to one hour.
+#session_timeout = "1h"
+
 [email]
 sender_email = "noa@resare.com"
 relay_host = "mail.resare.com"
