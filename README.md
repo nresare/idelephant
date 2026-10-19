@@ -46,6 +46,21 @@ user with that email, or creates a non-admin test user on first use. Bypass mode
 works with a loopback `origin` and database URI, and makes the app listen on
 `127.0.0.1`.
 
+## Login session duration
+
+Set the top-level `session_timeout` option to control how long a login
+session lasts without activity:
+
+```toml
+session_timeout = "1d" # 24 hours
+```
+
+The default is `"1h"` (one hour). Use a positive duration such as `"30s"`,
+`"15 minutes"`, `"12h"`, `"7d"`, or `"1h 30m"`, up to `4294967295` seconds.
+Session activity renews the timeout. This controls the idElephant
+login session; OAuth access tokens and ID tokens retain their own lifetimes.
+Restart the server after changing this setting.
+
 ## HTTPS and HTTP/2
 
 Set both top-level PEM paths in the application config to serve HTTPS on port 8443:

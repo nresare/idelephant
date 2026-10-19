@@ -32,6 +32,7 @@ tower-sessions-surrealdb-store = { version = "0.10" }
 surrealdb = { version = "3", default-features = false, features = ["protocol-ws"] }
 tower-sessions = "0.15"
 time = "0.3.46"
+humantime = "2.4"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 idelephant_webauthn = { path = "webauthn"}

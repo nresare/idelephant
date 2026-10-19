@@ -292,7 +292,7 @@ mod tests {
         let app = Router::new()
             .route("/test-login", get(login))
             .merge(group_routes())
-            .layer(crate::make_session_layer(db))
+            .layer(crate::make_session_layer(db, time::Duration::hours(1)))
             .with_state(state);
 
         let unauthorized = app
