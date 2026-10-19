@@ -319,6 +319,37 @@ impl PersistenceService {
         Ok(self.db.select(("identity", id)).await?)
     }
 
+    pub async fn fetch_identity_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<Identity>, IdentityError> {
+        let mut result = self
+            .db
+            .query("SELECT * FROM identity WHERE email = $email LIMIT 1")
+            .bind(("email", email.to_string()))
+            .await?;
+        Ok(result.take(0)?)
+    }
+
+    pub async fn create_development_identity(
+        &self,
+        email: &str,
+    ) -> Result<Identity, IdentityError> {
+        let identity = Identity {
+            email: email.to_string(),
+            created: Utc::now(),
+            admin: false,
+            id: None,
+            state: IdentityState::Active {
+                credentials: Vec::new(),
+            },
+        };
+        let _: Option<Record> = self.db.create("identity").content(identity).await?;
+        self.fetch_identity_by_email(email)
+            .await?
+            .ok_or_else(|| Logic("Development identity creation returned no record".to_string()))
+    }
+
     pub async fn list_users(&self) -> Result<Vec<UserSummary>, IdentityError> {
         let identities: Vec<Identity> = self.db.select("identity").await?;
         let mut users = identities
@@ -353,18 +384,6 @@ impl PersistenceService {
         let mut result = self
             .db
             .query("SELECT * FROM user_group ORDER BY name")
-            .await?;
-        Ok(result.take(0)?)
-    }
-
-    pub async fn fetch_identity_by_email(
-        &self,
-        email: &str,
-    ) -> Result<Option<Identity>, IdentityError> {
-        let mut result = self
-            .db
-            .query("SELECT * FROM identity WHERE email = $email LIMIT 1")
-            .bind(("email", email.to_string()))
             .await?;
         Ok(result.take(0)?)
     }
@@ -457,25 +476,6 @@ impl PersistenceService {
         }
         names.sort();
         Ok(names)
-    }
-
-    pub async fn create_development_identity(
-        &self,
-        email: &str,
-    ) -> Result<Identity, IdentityError> {
-        let identity = Identity {
-            email: email.to_string(),
-            created: Utc::now(),
-            admin: false,
-            id: None,
-            state: IdentityState::Active {
-                credentials: Vec::new(),
-            },
-        };
-        let _: Option<Record> = self.db.create("identity").content(identity).await?;
-        self.fetch_identity_by_email(email)
-            .await?
-            .ok_or_else(|| Logic("Development identity creation returned no record".to_string()))
     }
 
     pub async fn check_health(&self) -> Result<(), IdentityError> {

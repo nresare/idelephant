@@ -20,16 +20,15 @@ but I have a plan and I think that the other pieces will come.
 Install the SurrealDB CLI and run:
 
 ```sh
-./local-dev/local-db.sh start
+./scripts/local-db.sh start
 cargo run -- --bypass-authentication -c local-dev/idelephant.toml
 ```
 
 The script starts a database on `127.0.0.1:8001`, creates a database user named
 `idelephant`, and writes its password to `local-dev/idelephant-password`. The
-checked in config points to that file. It also creates a SurrealDB root administrator
-named `local_admin`, whose password is in `local-dev/root-password`. The passwords,
-database data, logs, and process files are excluded from Git. Run
-`./local-dev/local-db.sh stop` when finished.
+generated config points to that file. It also creates a SurrealDB root administrator
+named `local_admin`, whose password is in `local-dev/root-password`. These files and
+the database are excluded from Git. Run `./scripts/local-db.sh stop` when finished.
 
 To inspect the database as its administrator:
 
@@ -39,10 +38,9 @@ To inspect the database as its administrator:
   surreal sql --endpoint ws://127.0.0.1:8001 --namespace default --database idelephant)
 ```
 
-With `--bypass-authentication` (or `bypass_authentication = true` in the config file),
-open `http://127.0.0.1:8080/?user=root` to sign in as
+With `--bypass-authentication`, open `http://127.0.0.1:8080/?user=root` to sign in as
 the built-in app administrator. `/?user=alice@example.test` signs in as an existing
-user with that email, or creates a non-admin test user on first use. Bypass mode only
+user with that email, or creates a non-admin test user on first use. The flag only
 works with a loopback `origin` and database URI, and makes the app listen on
 `127.0.0.1`.
 
@@ -73,7 +71,8 @@ tls_key_path = "tls/key.pem"
 Relative paths resolve from the configuration file's directory. Supply a certificate
 chain and its matching unencrypted private key. Incomplete settings or unreadable,
 invalid, or mismatched files prevent startup. TLS advertises `h2` and `http/1.1`
-through ALPN. Omit both paths to keep HTTP on port 8080.
+through ALPN. Omit both paths to keep HTTP on port 8080. The authentication bypass
+still binds only to loopback, using port 8443 when TLS is enabled.
 
 `origin` remains the public URL used for authentication. For direct local HTTPS,
 set it to `https://localhost:8443`. Restart after replacing the certificate files.

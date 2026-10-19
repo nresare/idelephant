@@ -11,8 +11,6 @@ pub struct Config {
     )]
     pub session_timeout: time::Duration,
     pub root_key: String,
-    #[serde(default)]
-    pub bypass_authentication: bool,
     pub tls_cert_path: Option<String>,
     pub tls_key_path: Option<String>,
     #[serde(rename = "email")]
@@ -104,27 +102,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::Config;
-
-    #[test]
-    fn bypass_authentication_defaults_to_disabled_and_can_be_enabled() {
-        let config = r#"
-origin = "http://localhost:8080"
-root_key = "test-key"
-
-[email]
-relay_host = "localhost"
-sender_email = "admin@example.test"
-
-[persistence]
-uri = "ws://localhost:8001"
-"#;
-        let disabled: Config = toml::from_str(config).unwrap();
-        assert!(!disabled.bypass_authentication);
-
-        let enabled: Config =
-            toml::from_str(&format!("bypass_authentication = true\n{config}")).unwrap();
-        assert!(enabled.bypass_authentication);
-    }
 
     fn parse(timeout: &str) -> Result<Config, toml::de::Error> {
         toml::from_str(&format!(
