@@ -11,6 +11,7 @@ mod oidc;
 mod persistence;
 mod register;
 mod root_setup;
+mod shutdown;
 mod tls;
 mod util;
 mod web;
@@ -121,12 +122,63 @@ fn listen_address(tls_enabled: bool, bypass_authentication: bool) -> SocketAddr 
 
 async fn run() -> Result<(), Fatal> {
     let cli = Cli::parse();
+    let signals = shutdown::Signals::new().map_err(|e| Fatal::Other(e.into()))?;
 
-    // tracing_subscriber::fmt()
-    //     .with_target(false)
-    //     .compact()
-    //     .init();
+    let signal = signals.wait();
+    tokio::pin!(signal);
+    let PreparedServer {
+        app,
+        addr,
+        tls_config,
+    } = tokio::select! {
+        result = prepare_server(cli) => result?,
+        () = &mut signal => {
+            info!("shutdown complete during startup");
+            return Ok(());
+        }
+    };
+    if let Some(tls_config) = tls_config {
+        let handle = axum_server::Handle::new();
+        let server = axum_server::bind_rustls(addr, tls_config)
+            .handle(handle.clone())
+            .serve(app.into_make_service());
+        shutdown::drain(
+            server,
+            &mut signal,
+            || handle.graceful_shutdown(None),
+            shutdown::GRACE_PERIOD,
+        )
+        .await
+        .map_err(|e| Fatal::Listen(addr, e))?;
+    } else {
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|e| Fatal::Listen(addr, e))?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let server = axum::serve(listener, app.into_make_service()).with_graceful_shutdown(async {
+            let _ = rx.await;
+        });
+        shutdown::drain(
+            std::future::IntoFuture::into_future(server),
+            &mut signal,
+            || {
+                let _ = tx.send(());
+            },
+            shutdown::GRACE_PERIOD,
+        )
+        .await
+        .map_err(|e| Fatal::Other(e.into()))?;
+    }
+    Ok(())
+}
 
+struct PreparedServer {
+    app: Router,
+    addr: SocketAddr,
+    tls_config: Option<axum_server::tls_rustls::RustlsConfig>,
+}
+
+async fn prepare_server(cli: Cli) -> Result<PreparedServer, Fatal> {
     let config = std::fs::read_to_string(&cli.config_path)
         .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e.into()))?;
 
@@ -177,20 +229,11 @@ async fn run() -> Result<(), Fatal> {
         bypass_authentication = cli.bypass_authentication,
         "listening"
     );
-    if let Some(tls_config) = tls_config {
-        axum_server::bind_rustls(addr, tls_config)
-            .serve(app.into_make_service())
-            .await
-            .map_err(|e| Fatal::Listen(addr, e))?;
-    } else {
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .map_err(|e| Fatal::Listen(addr, e))?;
-        axum::serve(listener, app.into_make_service())
-            .await
-            .map_err(|e| Fatal::Other(e.into()))?;
-    }
-    Ok(())
+    Ok(PreparedServer {
+        app,
+        addr,
+        tls_config,
+    })
 }
 
 fn is_loopback_url(origin: &str) -> bool {

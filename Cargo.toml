@@ -17,7 +17,7 @@ axum = "0.8"
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rust-embed = "8.11"
-tokio = { version = "1.51" }
+tokio = { version = "1.51", features = ["signal"] }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 mime_guess = "2.0"
 tower-http = { version = "0.7", features = ["trace"] }
