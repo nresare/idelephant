@@ -74,11 +74,17 @@ struct ConsentRequest {
 #[derive(Debug, Deserialize)]
 struct TokenRequest {
     grant_type: String,
+    #[serde(default)]
     code: String,
+    #[serde(default)]
     redirect_uri: String,
     #[serde(default)]
     client_id: String,
+    #[serde(default)]
     code_verifier: String,
+    #[serde(default)]
+    refresh_token: String,
+    scope: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -96,6 +102,8 @@ struct TokenResponse {
     scope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     id_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_token: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -338,19 +346,31 @@ async fn token(
     State(oidc_service): State<OidcService>,
     headers: HeaderMap,
     form: Result<Form<TokenRequest>, FormRejection>,
-) -> Result<axum::Json<TokenResponse>, IdentityError> {
+) -> Result<Response, IdentityError> {
     let Form(mut request) = form.map_err(|_| {
         IdentityError::BadRequest(
             "Invalid token request form; expected grant_type, code, redirect_uri and code_verifier"
                 .to_string(),
         )
     })?;
-    request.client_id = token_client_id(&headers, &request.client_id)?;
+    if request.grant_type == "refresh_token" {
+        request.client_id = token_client_id(&headers, &request.client_id)
+            .map_err(|_| IdentityError::OAuth("invalid_client"))?;
+        return refresh_tokens(&persistence_service, request).await;
+    }
     if request.grant_type != "authorization_code" {
+        return Err(IdentityError::OAuth("unsupported_grant_type"));
+    }
+    if request.code.is_empty()
+        || request.redirect_uri.is_empty()
+        || request.code_verifier.is_empty()
+    {
         return Err(IdentityError::BadRequest(
-            "Only grant_type=authorization_code is supported".to_string(),
+            "Invalid token request form; expected grant_type, code, redirect_uri and code_verifier"
+                .to_string(),
         ));
     }
+    request.client_id = token_client_id(&headers, &request.client_id)?;
 
     let Some(code) = persistence_service
         .fetch_authorization_code(&request.code)
@@ -377,6 +397,14 @@ async fn token(
         ));
     }
 
+    if !persistence_service
+        .delete_authorization_code(&request.code)
+        .await?
+    {
+        return Err(IdentityError::BadRequest(
+            "Unknown authorization code".to_string(),
+        ));
+    }
     let access_token = Token::random().base64();
     let expires_in = chrono::Duration::hours(1);
     persistence_service
@@ -388,10 +416,6 @@ async fn token(
             chrono::Utc::now() + expires_in,
         )
         .await?;
-    persistence_service
-        .delete_authorization_code(&request.code)
-        .await?;
-
     let id_token = if code.scopes.iter().any(|scope| scope == "openid") {
         let identity = persistence_service
             .fetch_identity(&code.subject_id)
@@ -425,12 +449,122 @@ async fn token(
         None
     };
 
-    Ok(axum::Json(TokenResponse {
+    let refresh_token = if code.scopes.iter().any(|scope| scope == "offline_access") {
+        let refresh = Token::random().base64();
+        persistence_service
+            .create_refresh_token(
+                &refresh,
+                &code.client_id,
+                &code.subject_id,
+                code.scopes.clone(),
+                chrono::Utc::now() + chrono::Duration::days(30),
+            )
+            .await?;
+        Some(refresh)
+    } else {
+        None
+    };
+
+    Ok(token_response(TokenResponse {
         access_token,
         token_type: "Bearer".to_string(),
         expires_in: expires_in.num_seconds(),
         scope: code.scopes.join(" "),
         id_token,
+        refresh_token,
+    }))
+}
+
+fn token_response(tokens: TokenResponse) -> Response {
+    (
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::PRAGMA, "no-cache"),
+        ],
+        Json(tokens),
+    )
+        .into_response()
+}
+
+async fn refresh_tokens(
+    persistence: &PersistenceService,
+    request: TokenRequest,
+) -> Result<Response, IdentityError> {
+    if request.refresh_token.is_empty() {
+        return Err(IdentityError::OAuth("invalid_request"));
+    }
+    if persistence
+        .fetch_oauth_client(&request.client_id)
+        .await?
+        .is_none()
+    {
+        return Err(IdentityError::OAuth("invalid_client"));
+    }
+    let previous = persistence
+        .fetch_refresh_token(&request.refresh_token)
+        .await?
+        .ok_or(IdentityError::OAuth("invalid_grant"))?;
+    if previous.client_id != request.client_id {
+        return Err(IdentityError::OAuth("invalid_grant"));
+    }
+    if previous
+        .used_hashes
+        .contains(&crate::persistence::refresh_token_hash(
+            &request.refresh_token,
+        ))
+    {
+        persistence.revoke_refresh_token(&previous).await?;
+        return Err(IdentityError::OAuth("invalid_grant"));
+    }
+    if previous.expires_at <= chrono::Utc::now() {
+        return Err(IdentityError::OAuth("invalid_grant"));
+    }
+    let identity = persistence.fetch_identity(&previous.subject_id).await?;
+    if !identity.is_some_and(|identity| {
+        matches!(
+            identity.state,
+            crate::persistence::IdentityState::Active { .. }
+        )
+    }) {
+        persistence.revoke_refresh_token(&previous).await?;
+        return Err(IdentityError::OAuth("invalid_grant"));
+    }
+    let scopes = match request.scope {
+        Some(scope) => {
+            let scopes: Vec<String> = scope.split_whitespace().map(str::to_string).collect();
+            if scopes.is_empty() || scopes.iter().any(|scope| !previous.scopes.contains(scope)) {
+                return Err(IdentityError::OAuth("invalid_scope"));
+            }
+            scopes
+        }
+        None => previous.scopes.clone(),
+    };
+    let refresh_token = Token::random().base64();
+    if !persistence
+        .rotate_refresh_token(&previous, &refresh_token, scopes.clone())
+        .await?
+    {
+        persistence.revoke_refresh_token(&previous).await?;
+        return Err(IdentityError::OAuth("invalid_grant"));
+    }
+    let access_token = Token::random().base64();
+    let lifetime = chrono::Duration::hours(1);
+    persistence
+        .create_access_token(
+            &access_token,
+            &previous.client_id,
+            &previous.subject_id,
+            scopes.clone(),
+            chrono::Utc::now() + lifetime,
+        )
+        .await?;
+    Ok(token_response(TokenResponse {
+        access_token,
+        token_type: "Bearer".to_string(),
+        expires_in: lifetime.num_seconds(),
+        scope: scopes.join(" "),
+        id_token: None,
+        refresh_token: Some(refresh_token),
     }))
 }
 
@@ -538,6 +672,7 @@ async fn continue_authorization(
             "scopes": pending.scopes,
             "requests_email": pending.scopes.iter().any(|scope| scope == "email"),
             "requests_groups": pending.scopes.iter().any(|scope| scope == "groups"),
+            "requests_offline_access": pending.scopes.iter().any(|scope| scope == "offline_access"),
         }),
     )?;
     Ok(Html(body).into_response())
@@ -664,8 +799,8 @@ fn validate_client_registration_request(
     Ok(())
 }
 
-fn allowed_scopes() -> [&'static str; 4] {
-    ["openid", "profile", "email", "groups"]
+fn allowed_scopes() -> [&'static str; 5] {
+    ["openid", "profile", "email", "groups", "offline_access"]
 }
 
 fn verify_pkce(code_verifier: &str, expected_challenge: &str) -> bool {
@@ -804,6 +939,7 @@ mod tests {
     struct TokenJson {
         access_token: String,
         id_token: Option<String>,
+        refresh_token: Option<String>,
     }
 
     fn admin_identity() -> Identity {
@@ -891,6 +1027,8 @@ mod tests {
             redirect_uri: "http://localhost:4000/callback".to_string(),
             client_id: "client-1".to_string(),
             code_verifier: "verifier-123".to_string(),
+            refresh_token: String::new(),
+            scope: None,
         }
     }
 
@@ -1090,6 +1228,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_validates_client_scope_expiry_identity_and_deletion() -> anyhow::Result<()> {
+        let ps = PersistenceService::new(mem_db().await?);
+        let user = ps.persist_identity(admin_identity()).await?;
+        for client in ["client-1", "other"] {
+            ps.create_oauth_client(client, client, vec!["http://localhost/callback".into()])
+                .await?;
+        }
+        let scopes = vec!["openid".into(), "email".into(), "offline_access".into()];
+        ps.create_refresh_token(
+            "valid",
+            "client-1",
+            &user,
+            scopes.clone(),
+            Utc::now() + Duration::days(30),
+        )
+        .await?;
+        let refresh_request = |token: &str, client: &str, scope: Option<&str>| TokenRequest {
+            grant_type: "refresh_token".into(),
+            refresh_token: token.into(),
+            client_id: client.into(),
+            scope: scope.map(str::to_string),
+            ..token_request()
+        };
+        for (token, client, scope, expected) in [
+            ("", "client-1", None, "invalid_request"),
+            ("unknown", "client-1", None, "invalid_grant"),
+            ("valid", "unregistered", None, "invalid_client"),
+            ("valid", "other", None, "invalid_grant"),
+            ("valid", "client-1", Some("openid groups"), "invalid_scope"),
+            ("valid", "client-1", Some(""), "invalid_scope"),
+        ] {
+            let error = super::refresh_tokens(&ps, refresh_request(token, client, scope))
+                .await
+                .unwrap_err();
+            assert!(matches!(error, IdentityError::OAuth(code) if code == expected));
+        }
+        let response =
+            super::refresh_tokens(&ps, refresh_request("valid", "client-1", Some("email"))).await?;
+        let renewed: Value = serde_json::from_slice(&response_body(response).await)?;
+        assert_eq!(renewed["scope"], "email");
+        assert!(renewed.get("id_token").is_none());
+        let new_refresh = renewed["refresh_token"].as_str().unwrap();
+        assert_eq!(
+            ps.fetch_refresh_token(new_refresh).await?.unwrap().scopes,
+            vec!["email"]
+        );
+        assert!(matches!(
+            super::refresh_tokens(
+                &ps,
+                refresh_request(new_refresh, "client-1", Some("openid"))
+            )
+            .await,
+            Err(IdentityError::OAuth("invalid_scope"))
+        ));
+        ps.delete_oauth_client("client-1").await?;
+        ps.create_oauth_client(
+            "client-1",
+            "Recreated",
+            vec!["http://localhost/callback".into()],
+        )
+        .await?;
+        assert!(ps.fetch_refresh_token(new_refresh).await?.is_none());
+        assert!(ps.fetch_refresh_token("valid").await?.is_none());
+        ps.create_refresh_token(
+            "expired",
+            "client-1",
+            &user,
+            scopes.clone(),
+            Utc::now() - Duration::seconds(1),
+        )
+        .await?;
+        ps.create_refresh_token(
+            "missing-user",
+            "client-1",
+            "missing",
+            scopes.clone(),
+            Utc::now() + Duration::days(1),
+        )
+        .await?;
+        for token in ["expired", "missing-user"] {
+            assert!(matches!(
+                super::refresh_tokens(&ps, refresh_request(token, "client-1", None)).await,
+                Err(IdentityError::OAuth("invalid_grant"))
+            ));
+        }
+        ps.create_refresh_token(
+            "inactive",
+            "client-1",
+            &user,
+            scopes,
+            Utc::now() + Duration::days(1),
+        )
+        .await?;
+        let mut identity = ps.fetch_identity(&user).await?.unwrap();
+        identity.state = IdentityState::Invited {
+            token: crate::util::Token::random(),
+        };
+        ps.update_identity(&identity).await?;
+        assert!(matches!(
+            super::refresh_tokens(&ps, refresh_request("inactive", "client-1", None)).await,
+            Err(IdentityError::OAuth("invalid_grant"))
+        ));
+        assert!(ps.fetch_refresh_token("inactive").await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn oidc_smoke_test() -> anyhow::Result<()> {
         for secret in [
             None,
@@ -1097,12 +1342,17 @@ mod tests {
             Some("different:secret"),
             Some(""),
         ] {
-            oidc_smoke_test_with_secret(secret).await?;
+            for offline in [false, true] {
+                oidc_smoke_test_with_secret(secret, offline).await?;
+            }
         }
         Ok(())
     }
 
-    async fn oidc_smoke_test_with_secret(secret: Option<&str>) -> anyhow::Result<()> {
+    async fn oidc_smoke_test_with_secret(
+        secret: Option<&str>,
+        offline: bool,
+    ) -> anyhow::Result<()> {
         let db = mem_db().await?;
         let persistence = Arc::new(PersistenceService::new(db.clone()));
         let user_id = persistence
@@ -1189,7 +1439,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&scope=openid%20email%20groups&state=state-123&nonce=nonce-123&code_challenge={challenge}&code_challenge_method=S256"
+                        "/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&scope=openid%20email%20groups{}&state=state-123&nonce=nonce-123&code_challenge={challenge}&code_challenge_method=S256", if offline { "%20offline_access" } else { "" }
                     ))
                     .header(header::COOKIE, &cookie)
                     .body(Body::empty())?,
@@ -1279,6 +1529,7 @@ mod tests {
             )))?)
             .await?;
         assert_eq!(token.status(), StatusCode::OK);
+        assert_eq!(token.headers()[header::CACHE_CONTROL], "no-store");
         let token_json: TokenJson = serde_json::from_slice(&response_body(token).await)?;
         assert!(!token_json.access_token.is_empty());
         assert_eq!(token_json.id_token.as_ref().unwrap().split('.').count(), 3);
@@ -1313,6 +1564,70 @@ mod tests {
         );
         assert_eq!(userinfo_json["groups"], json!(["Engineering"]));
 
+        assert_eq!(token_json.refresh_token.is_some(), offline);
+        if let Some(refresh) = token_json.refresh_token {
+            let stored = persistence.fetch_refresh_token(&refresh).await?.unwrap();
+            assert_ne!(stored.token_hash, refresh);
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+            if let Some(secret) = secret {
+                request = request.header(
+                    header::AUTHORIZATION,
+                    format!("Basic {}", STANDARD.encode(format!("client-1:{secret}"))),
+                );
+            }
+            let response = app.clone().oneshot(request.body(Body::from(format!(
+                "grant_type=refresh_token&client_id=client-1&refresh_token={refresh}&client_secret=ignored"
+            )))?).await?;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let renewed: Value = serde_json::from_slice(&response_body(response).await)?;
+            assert_ne!(renewed["access_token"], token_json.access_token);
+            assert_ne!(renewed["refresh_token"], refresh);
+            assert_eq!(renewed["scope"], "openid email groups offline_access");
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/userinfo")
+                        .header(
+                            header::AUTHORIZATION,
+                            format!("Bearer {}", renewed["access_token"].as_str().unwrap()),
+                        )
+                        .body(Body::empty())?,
+                )
+                .await?;
+            assert_eq!(response.status(), StatusCode::OK);
+            let new_refresh = renewed["refresh_token"].as_str().unwrap();
+            assert_eq!(
+                persistence
+                    .fetch_refresh_token(new_refresh)
+                    .await?
+                    .unwrap()
+                    .expires_at,
+                stored.expires_at
+            );
+            // Reusing the old token revokes its replacement as well.
+            for token in [&refresh, new_refresh] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/token")
+                            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                            .body(Body::from(format!(
+                                "grant_type=refresh_token&client_id=client-1&refresh_token={token}"
+                            )))?,
+                    )
+                    .await?;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                let error: Value = serde_json::from_slice(&response_body(response).await)?;
+                assert_eq!(error["error"], "invalid_grant");
+            }
+        }
         Ok(())
     }
 

@@ -24,6 +24,9 @@
 {{#if requests_groups}}
 <p>It is also requesting your group memberships. The app will receive the names of your current groups.</p>
 {{/if}}
+{{#if requests_offline_access}}
+<p>It is also requesting continued access for up to 30 days, even when you are not signed in.</p>
+{{/if}}
 <p class="muted">You are currently signed in as <strong>{{identity_email}}</strong>.</p>
 <form class="button-group" action="/authorize/consent" method="post">
 <button type="submit" name="decision" value="approve">Yes, continue</button>

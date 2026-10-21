@@ -11,6 +11,8 @@ pub enum IdentityError {
     Anyhow(#[from] anyhow::Error),
     #[error("{0}")]
     BadRequest(String),
+    #[error("OAuth error: {0}")]
+    OAuth(&'static str),
     #[error("{0}")]
     Unauthorized(String),
     #[error("Failure related to interacting with the session: {0}")]
@@ -32,6 +34,12 @@ impl IntoResponse for IdentityError {
     fn into_response(self) -> axum::response::Response {
         error!("{:#}", self);
         match self {
+            IdentityError::OAuth(code) => (
+                StatusCode::BAD_REQUEST,
+                [("cache-control", "no-store"), ("pragma", "no-cache")],
+                axum::Json(serde_json::json!({"error": code})),
+            )
+                .into_response(),
             IdentityError::BadRequest(message) => {
                 (StatusCode::BAD_REQUEST, message).into_response()
             }

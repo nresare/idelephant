@@ -97,6 +97,7 @@ impl OidcService {
                 "email".to_string(),
                 "profile".to_string(),
                 "groups".to_string(),
+                "offline_access".to_string(),
             ],
             token_endpoint_auth_methods_supported: vec![
                 "none".to_string(),
@@ -113,7 +114,10 @@ impl OidcService {
                 "email".to_string(),
                 "groups".to_string(),
             ],
-            grant_types_supported: vec!["authorization_code".to_string()],
+            grant_types_supported: vec![
+                "authorization_code".to_string(),
+                "refresh_token".to_string(),
+            ],
             code_challenge_methods_supported: vec!["S256".to_string()],
         }
     }
