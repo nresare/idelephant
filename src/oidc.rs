@@ -98,7 +98,10 @@ impl OidcService {
                 "profile".to_string(),
                 "groups".to_string(),
             ],
-            token_endpoint_auth_methods_supported: vec!["none".to_string()],
+            token_endpoint_auth_methods_supported: vec![
+                "none".to_string(),
+                "client_secret_basic".to_string(),
+            ],
             claims_supported: vec![
                 "sub".to_string(),
                 "iss".to_string(),
@@ -390,6 +393,10 @@ mod tests {
             "http://localhost:8080/authorize"
         );
         assert_eq!(configuration.jwks_uri, "http://localhost:8080/jwks.json");
+        assert_eq!(
+            configuration.token_endpoint_auth_methods_supported,
+            ["none", "client_secret_basic"]
+        );
     }
 
     #[test]
