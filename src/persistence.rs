@@ -18,6 +18,12 @@ use surrealdb::Surreal;
 const NAMESPACE: &str = "default";
 const DATABASE: &str = "idelephant";
 
+pub(crate) fn refresh_token_hash(token: &str) -> String {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct Identity {
     pub email: String,
@@ -184,6 +190,19 @@ pub struct AccessToken {
     pub id: RecordId,
 }
 
+// One row represents a refresh-token family. Retained hashes detect reuse without
+// storing bearer credentials. Rotation preserves the family's absolute expiry.
+#[derive(Debug, Clone, SurrealValue)]
+pub struct RefreshToken {
+    pub id: RecordId,
+    pub token_hash: String,
+    pub used_hashes: Vec<String>,
+    pub client_id: String,
+    pub subject_id: String,
+    pub scopes: Vec<String>,
+    pub expires_at: DateTime<Utc>,
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct ConsentGrant {
     pub subject_id: String,
@@ -277,6 +296,7 @@ async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
          DEFINE INDEX IF NOT EXISTS groupMembership ON group_membership FIELDS group_id, subject_id UNIQUE;
          DEFINE INDEX IF NOT EXISTS authorizationCode ON authorization_code FIELDS code UNIQUE;
          DEFINE INDEX IF NOT EXISTS accessTokenHash ON access_token FIELDS token_hash UNIQUE;
+         DEFINE INDEX IF NOT EXISTS refreshTokenHash ON refresh_token FIELDS token_hash UNIQUE;
          DEFINE INDEX IF NOT EXISTS consentGrantBySubjectClient ON consent_grant FIELDS subject_id, client_id UNIQUE;
          DEFINE INDEX IF NOT EXISTS jwkKeyKid ON jwk_key FIELDS kid UNIQUE;
          DEFINE INDEX IF NOT EXISTS jwkKeyActiveFrom ON jwk_key FIELDS active_from UNIQUE;
@@ -536,7 +556,7 @@ impl PersistenceService {
         let Some(client) = self.fetch_oauth_client(client_id).await? else {
             return Ok(false);
         };
-        self.db.query("BEGIN TRANSACTION; DELETE authorization_code WHERE client_id = $client_id; DELETE access_token WHERE client_id = $client_id; DELETE consent_grant WHERE client_id = $client_id; DELETE $record; COMMIT TRANSACTION;")
+        self.db.query("BEGIN TRANSACTION; DELETE authorization_code WHERE client_id = $client_id; DELETE access_token WHERE client_id = $client_id; DELETE refresh_token WHERE client_id = $client_id; DELETE consent_grant WHERE client_id = $client_id; DELETE $record; COMMIT TRANSACTION;")
             .bind(("client_id", client_id.to_string())).bind(("record", client.id)).await?.check()?;
         Ok(true)
     }
@@ -667,10 +687,12 @@ impl PersistenceService {
     }
 
     pub async fn delete_authorization_code(&self, code: &str) -> Result<bool, IdentityError> {
-        let Some(authorization_code) = self.fetch_authorization_code(code).await? else {
-            return Ok(false);
-        };
-        let result: Option<AuthorizationCode> = self.db.delete(authorization_code.id).await?;
+        let mut response = self
+            .db
+            .query("DELETE authorization_code WHERE code = $code RETURN BEFORE")
+            .bind(("code", code.to_string()))
+            .await?;
+        let result: Option<AuthorizationCode> = response.take(0)?;
         Ok(result.is_some())
     }
 
@@ -707,6 +729,56 @@ impl PersistenceService {
             .bind(("token_hash", token_hash.to_string()))
             .await?;
         Ok(result.take(0)?)
+    }
+
+    pub async fn create_refresh_token(
+        &self,
+        token: &str,
+        client_id: &str,
+        subject_id: &str,
+        scopes: Vec<String>,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), IdentityError> {
+        self.db.query("CREATE refresh_token SET token_hash = $hash, used_hashes = [], client_id = $client, subject_id = $subject, scopes = $scopes, expires_at = $expires")
+            .bind(("hash", refresh_token_hash(token)))
+            .bind(("client", client_id.to_string()))
+            .bind(("subject", subject_id.to_string()))
+            .bind(("scopes", scopes))
+            .bind(("expires", expires_at))
+            .await?.check()?;
+        Ok(())
+    }
+
+    pub async fn fetch_refresh_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<RefreshToken>, IdentityError> {
+        let mut result = self.db.query("SELECT * FROM refresh_token WHERE token_hash = $hash OR used_hashes CONTAINS $hash LIMIT 1")
+            .bind(("hash", refresh_token_hash(token))).await?;
+        Ok(result.take(0)?)
+    }
+
+    pub async fn rotate_refresh_token(
+        &self,
+        previous: &RefreshToken,
+        replacement: &str,
+        scopes: Vec<String>,
+    ) -> Result<bool, IdentityError> {
+        // The conditional update is the single-use gate, including across instances.
+        let mut result = self.db.query("UPDATE $record SET token_hash = $replacement, used_hashes += $previous, scopes = $scopes WHERE token_hash = $previous AND expires_at > $now RETURN BEFORE")
+            .bind(("record", previous.id.clone()))
+            .bind(("replacement", refresh_token_hash(replacement)))
+            .bind(("previous", previous.token_hash.clone()))
+            .bind(("scopes", scopes))
+            .bind(("now", Utc::now()))
+            .await?;
+        let rotated: Option<RefreshToken> = result.take(0)?;
+        Ok(rotated.is_some())
+    }
+
+    pub async fn revoke_refresh_token(&self, token: &RefreshToken) -> Result<(), IdentityError> {
+        let _: Option<RefreshToken> = self.db.delete(token.id.clone()).await?;
+        Ok(())
     }
 
     pub async fn grant_consent(
@@ -1018,6 +1090,29 @@ mod tests {
 
         assert!(ps.delete_authorization_code("code-hash").await?);
         assert!(ps.fetch_authorization_code("code-hash").await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_rotation_is_single_use_and_stores_only_hashes() -> Result<()> {
+        let ps = PersistenceService::new(mem_db().await?);
+        let expiry = Utc::now() + Duration::days(30);
+        ps.create_refresh_token("original", "client", "alice", vec!["openid".into()], expiry)
+            .await?;
+        let original = ps.fetch_refresh_token("original").await?.unwrap();
+        assert_ne!(original.token_hash, "original");
+        let (first, second) = tokio::join!(
+            ps.rotate_refresh_token(&original, "first", original.scopes.clone()),
+            ps.rotate_refresh_token(&original, "second", original.scopes.clone()),
+        );
+        assert_ne!(first?, second?);
+        let rotated = ps.fetch_refresh_token("original").await?.unwrap();
+        assert_eq!(rotated.used_hashes, vec![original.token_hash]);
+        assert_eq!(rotated.expires_at, expiry);
+        ps.revoke_refresh_token(&rotated).await?;
+        for token in ["original", "first", "second"] {
+            assert!(ps.fetch_refresh_token(token).await?.is_none());
+        }
         Ok(())
     }
 

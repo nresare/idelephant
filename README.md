@@ -95,7 +95,8 @@ HTTPS. The generated BackendTLSPolicy validates the service hostname against the
 Sign in with an admin account and open **App registrations** from the admin navigation. You can
 register apps with a unique client ID, a display name, and one redirect URI per line.
 Existing apps can be edited or deleted; client IDs stay fixed when editing.
-Deleting an app also revokes its stored access tokens, authorization codes, and consents.
+Deleting an app also revokes its stored access tokens, refresh tokens, authorization
+codes, and consents.
 
 The token endpoint accepts a client ID in the form body without authentication,
 or as the username in HTTP Basic authentication. Any Basic client secret is
@@ -103,6 +104,30 @@ accepted and ignored, including an empty secret. Client IDs must still be
 registered, and authorization code exchanges require the matching redirect URI
 and S256 PKCE verifier. If both Basic and form client IDs are supplied, they must
 match.
+
+## Refresh tokens
+
+Request `offline_access` alongside `openid` to receive a refresh token after user
+consent. To renew access, POST a form to `/token` containing
+`grant_type=refresh_token`, `client_id`, and `refresh_token`. The same Basic client
+ID handling described above is supported. No redirect URI or PKCE verifier is
+required for refresh requests.
+
+Each successful refresh returns a new one-hour access token and a replacement
+refresh token. Save the replacement before refreshing again. Refresh tokens expire
+30 days after the initial authorization; rotation does not extend this deadline.
+They work independently of the browser login session. Refresh responses do not
+include a new ID token.
+
+An optional `scope` field can reduce the granted scopes; omitted scopes retain the
+current grant. Reduced scopes also apply to subsequent refreshes. Tokens are bound
+to their registered client and an active user. Reusing a replaced refresh token
+revokes that entire refresh-token family, requiring a new authorization. Previously
+issued access tokens remain valid until their own expiry.
+
+Only SHA-256 hashes of refresh tokens are stored in the database, including prior
+hashes used for replay detection. The raw refresh token is returned to the client
+and cannot be recovered from its stored hash.
 
 ## Managing groups
 
