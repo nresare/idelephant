@@ -44,6 +44,13 @@ user with that email, or creates a non-admin test user on first use. The flag on
 works with a loopback `origin` and database URI, and makes the app listen on
 `127.0.0.1`.
 
+## Shutdown
+
+SIGTERM and SIGINT (Ctrl-C) stop the server gracefully for both HTTP and HTTPS.
+The server logs the signal, stops accepting connections, and allows active requests
+up to 25 seconds to finish before exiting. Keep the deployment termination grace
+period longer than this deadline; the Kubernetes default is 30 seconds.
+
 ## Login session duration
 
 Set the top-level `session_timeout` option to control how long a login
