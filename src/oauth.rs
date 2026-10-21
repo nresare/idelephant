@@ -7,12 +7,13 @@ use crate::persistence::{
 use crate::util::Token;
 use crate::web::Templates;
 use crate::AppState;
+use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Query, State};
 use axum::http::{header, HeaderMap};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -75,6 +76,7 @@ struct TokenRequest {
     grant_type: String,
     code: String,
     redirect_uri: String,
+    #[serde(default)]
     client_id: String,
     code_verifier: String,
 }
@@ -334,8 +336,16 @@ async fn authorize_consent(
 async fn token(
     State(persistence_service): State<PersistenceService>,
     State(oidc_service): State<OidcService>,
-    Form(request): Form<TokenRequest>,
+    headers: HeaderMap,
+    form: Result<Form<TokenRequest>, FormRejection>,
 ) -> Result<axum::Json<TokenResponse>, IdentityError> {
+    let Form(mut request) = form.map_err(|_| {
+        IdentityError::BadRequest(
+            "Invalid token request form; expected grant_type, code, redirect_uri and code_verifier"
+                .to_string(),
+        )
+    })?;
+    request.client_id = token_client_id(&headers, &request.client_id)?;
     if request.grant_type != "authorization_code" {
         return Err(IdentityError::BadRequest(
             "Only grant_type=authorization_code is supported".to_string(),
@@ -692,6 +702,45 @@ fn build_redirect(
     Ok(redirect.to_string())
 }
 
+// Client secrets are deliberately ignored: all registered clients still require PKCE.
+fn token_client_id(headers: &HeaderMap, form_client_id: &str) -> Result<String, IdentityError> {
+    let invalid_header =
+        || IdentityError::BadRequest("Invalid Basic Authorization header".to_string());
+    let Some(authorization) = headers.get(header::AUTHORIZATION) else {
+        if form_client_id.is_empty() {
+            return Err(IdentityError::BadRequest("Missing client_id".to_string()));
+        }
+        return Ok(form_client_id.to_string());
+    };
+    if headers.get_all(header::AUTHORIZATION).iter().count() != 1 {
+        return Err(invalid_header());
+    }
+    let (scheme, credentials) = authorization
+        .to_str()
+        .map_err(|_| invalid_header())?
+        .split_once(' ')
+        .ok_or_else(invalid_header)?;
+    if !scheme.eq_ignore_ascii_case("Basic") {
+        return Err(invalid_header());
+    }
+    let decoded = STANDARD.decode(credentials).map_err(|_| invalid_header())?;
+    let credentials = std::str::from_utf8(&decoded).map_err(|_| invalid_header())?;
+    let (username, _secret) = credentials.split_once(':').ok_or_else(invalid_header)?;
+    // OAuth Basic usernames use application/x-www-form-urlencoded encoding.
+    let query = format!("client_id={username}");
+    let mut pairs = url::form_urlencoded::parse(query.as_bytes());
+    let (_, client_id) = pairs.next().ok_or_else(invalid_header)?;
+    if client_id.is_empty() || pairs.next().is_some() {
+        return Err(invalid_header());
+    }
+    if !form_client_id.is_empty() && form_client_id != client_id {
+        return Err(IdentityError::BadRequest(
+            "Basic and form client_id do not match".to_string(),
+        ));
+    }
+    Ok(client_id.into_owned())
+}
+
 fn bearer_token(headers: &HeaderMap) -> Result<&str, IdentityError> {
     let authorization = headers
         .get(header::AUTHORIZATION)
@@ -713,9 +762,9 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, IdentityError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bearer_token, build_redirect, consent_satisfies_request, validate_authorization_request,
-        validate_token_request, verify_pkce, AuthorizationRequest, CreateOAuthClientRequest,
-        PendingAuthorizationRequest, TokenRequest, PENDING_AUTHORIZATION,
+        bearer_token, build_redirect, consent_satisfies_request, token_client_id,
+        validate_authorization_request, validate_token_request, verify_pkce, AuthorizationRequest,
+        CreateOAuthClientRequest, PendingAuthorizationRequest, TokenRequest, PENDING_AUTHORIZATION,
     };
     use crate::auth::IDENTITY;
     use crate::config::EmailConfig;
@@ -734,7 +783,7 @@ mod tests {
     use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
     use axum::routing::get;
     use axum::Router;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
     use base64::Engine;
     use chrono::{Duration, Utc};
     use serde::Deserialize;
@@ -910,6 +959,65 @@ mod tests {
     }
 
     #[test]
+    fn token_client_id_accepts_basic_and_form_clients() {
+        assert_eq!(
+            token_client_id(&HeaderMap::new(), "client-1").unwrap(),
+            "client-1"
+        );
+        for secret in ["anything", "different:secret", ""] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::AUTHORIZATION,
+                format!("bAsIc {}", STANDARD.encode(format!("client-1:{secret}")))
+                    .parse()
+                    .unwrap(),
+            );
+            assert_eq!(token_client_id(&headers, "").unwrap(), "client-1");
+            assert_eq!(token_client_id(&headers, "client-1").unwrap(), "client-1");
+            assert!(token_client_id(&headers, "other-client").is_err());
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!(
+                "Basic {}",
+                STANDARD.encode("client%3Awith%2Bspecial+characters:secret")
+            )
+            .parse()
+            .unwrap(),
+        );
+        assert_eq!(
+            token_client_id(&headers, "").unwrap(),
+            "client:with+special characters"
+        );
+    }
+
+    #[test]
+    fn token_client_id_rejects_missing_or_malformed_credentials() {
+        assert!(token_client_id(&HeaderMap::new(), "").is_err());
+        for value in [
+            "Basic !!!".to_string(),
+            "Bearer token".to_string(),
+            "Basic".to_string(),
+            format!("Basic {}", STANDARD.encode("no-colon")),
+            format!("Basic {}", STANDARD.encode(":secret")),
+            format!("Basic {}", STANDARD.encode([0xff, b':'])),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::AUTHORIZATION, value.parse().unwrap());
+            // A valid form client must not hide a malformed Authorization header.
+            assert!(token_client_id(&headers, "client-1").is_err());
+        }
+        let mut headers = HeaderMap::new();
+        let value: HeaderValue = format!("Basic {}", STANDARD.encode("client-1:secret"))
+            .parse()
+            .unwrap();
+        headers.append(header::AUTHORIZATION, value.clone());
+        headers.append(header::AUTHORIZATION, value);
+        assert!(token_client_id(&headers, "").is_err());
+    }
+
+    #[test]
     fn bearer_token_extracts_token() {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -983,6 +1091,18 @@ mod tests {
 
     #[tokio::test]
     async fn oidc_smoke_test() -> anyhow::Result<()> {
+        for secret in [
+            None,
+            Some("arbitrary-secret"),
+            Some("different:secret"),
+            Some(""),
+        ] {
+            oidc_smoke_test_with_secret(secret).await?;
+        }
+        Ok(())
+    }
+
+    async fn oidc_smoke_test_with_secret(secret: Option<&str>) -> anyhow::Result<()> {
         let db = mem_db().await?;
         let persistence = Arc::new(PersistenceService::new(db.clone()));
         let user_id = persistence
@@ -1105,17 +1225,58 @@ mod tests {
         let code = query.get("code").unwrap().to_string();
         assert_eq!(query.get("state").unwrap(), "state-123");
 
-        let token = app
+        // Invalid clients and PKCE proofs must not consume the code or bypass validation.
+        for (username, proof) in [("other-client", verifier), ("client-1", "wrong-verifier")] {
+            let rejected = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/token")
+                        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                        .header(
+                            header::AUTHORIZATION,
+                            format!("Basic {}", STANDARD.encode(format!("{username}:any-secret"))),
+                        )
+                        .body(Body::from(format!(
+                            "grant_type=authorization_code&code={code}&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&code_verifier={proof}"
+                        )))?,
+                )
+                .await?;
+            assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        }
+        let malformed = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/token")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .body(Body::from(format!(
-                        "grant_type=authorization_code&code={code}&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&client_id=client-1&code_verifier={verifier}"
-                    )))?,
+                    .body(Body::from("grant_type=authorization_code"))?,
             )
+            .await?;
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+        assert!(String::from_utf8(response_body(malformed).await)?
+            .contains("Invalid token request form"));
+
+        let mut token_request = Request::builder()
+            .method("POST")
+            .uri("/token")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+        let client_form = if let Some(secret) = secret {
+            token_request = token_request.header(
+                header::AUTHORIZATION,
+                format!("Basic {}", STANDARD.encode(format!("client-1:{secret}"))),
+            );
+            ""
+        } else {
+            "&client_id=client-1"
+        };
+        let token = app
+            .clone()
+            .oneshot(token_request.body(Body::from(format!(
+                "grant_type=authorization_code&code={code}&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback{client_form}&code_verifier={verifier}"
+            )))?)
             .await?;
         assert_eq!(token.status(), StatusCode::OK);
         let token_json: TokenJson = serde_json::from_slice(&response_body(token).await)?;

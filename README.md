@@ -90,6 +90,13 @@ register apps with a unique client ID, a display name, and one redirect URI per 
 Existing apps can be edited or deleted; client IDs stay fixed when editing.
 Deleting an app also revokes its stored access tokens, authorization codes, and consents.
 
+The token endpoint accepts a client ID in the form body without authentication,
+or as the username in HTTP Basic authentication. Any Basic client secret is
+accepted and ignored, including an empty secret. Client IDs must still be
+registered, and authorization code exchanges require the matching redirect URI
+and S256 PKCE verifier. If both Basic and form client IDs are supplied, they must
+match.
+
 ## Managing groups
 
 Admins can open **Groups** to create groups with a name and description, edit or delete
