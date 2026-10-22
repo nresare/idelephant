@@ -1,4 +1,5 @@
 use crate::auth::IDENTITY;
+use crate::client_metadata::Client;
 use crate::error::IdentityError;
 use crate::oidc::{JwksResponse, OidcService, OpenidConfiguration};
 use crate::persistence::{
@@ -40,15 +41,22 @@ pub fn oauth_routes() -> Router<AppState> {
             get(openid_configuration),
         )
         .route("/jwks.json", get(jwks))
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(openid_configuration),
+        )
 }
 
 pub const PENDING_AUTHORIZATION: &str = "idelephant.oauth.pending-authorization";
 
 #[derive(Debug, Deserialize)]
 struct AuthorizationRequest {
+    #[serde(default)]
+    resource: Option<String>,
     response_type: String,
     client_id: String,
     redirect_uri: String,
+    #[serde(default)]
     scope: String,
     state: Option<String>,
     nonce: Option<String>,
@@ -58,6 +66,8 @@ struct AuthorizationRequest {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct PendingAuthorizationRequest {
+    #[serde(default)]
+    resource: Option<String>,
     client_id: String,
     redirect_uri: String,
     scopes: Vec<String>,
@@ -73,6 +83,8 @@ struct ConsentRequest {
 
 #[derive(Debug, Deserialize)]
 struct TokenRequest {
+    #[serde(default)]
+    resource: Option<String>,
     grant_type: String,
     #[serde(default)]
     code: String,
@@ -217,14 +229,10 @@ async fn authorize(
     State(oidc_service): State<OidcService>,
     State(templates): State<Templates>,
 ) -> Result<Response, IdentityError> {
-    let Some(client) = persistence_service
-        .fetch_oauth_client(&request.client_id)
-        .await?
-    else {
-        return Err(IdentityError::BadRequest(
-            "Unknown OAuth client".to_string(),
-        ));
-    };
+    let client = oidc_service
+        .clients
+        .resolve(&persistence_service, &request.client_id)
+        .await?;
     let pending = validate_authorization_request(request, &client)?;
     continue_authorization(
         session,
@@ -252,15 +260,11 @@ async fn resume_authorize(
         ));
     };
 
-    let Some(client) = persistence_service
-        .fetch_oauth_client(&pending.client_id)
-        .await?
-    else {
-        return Err(IdentityError::BadRequest(
-            "Pending authorization request references unknown client".to_string(),
-        ));
-    };
-
+    let client = oidc_service
+        .clients
+        .resolve(&persistence_service, &pending.client_id)
+        .await?;
+    validate_pending_client(&pending, &client)?;
     continue_authorization(
         session,
         persistence_service,
@@ -276,6 +280,7 @@ async fn resume_authorize(
 async fn authorize_consent(
     session: Session,
     State(persistence_service): State<PersistenceService>,
+    State(oidc_service): State<OidcService>,
     Form(consent): Form<ConsentRequest>,
 ) -> Result<Redirect, IdentityError> {
     let Some(identity): Option<Identity> = session.get(IDENTITY).await? else {
@@ -291,6 +296,11 @@ async fn authorize_consent(
         ));
     };
 
+    let client = oidc_service
+        .clients
+        .resolve(&persistence_service, &pending.client_id)
+        .await?;
+    validate_pending_client(&pending, &client)?;
     if consent.decision == "deny" {
         session
             .remove::<PendingAuthorizationRequest>(PENDING_AUTHORIZATION)
@@ -300,6 +310,7 @@ async fn authorize_consent(
             &[
                 ("error", Some("access_denied")),
                 ("state", pending.state.as_deref()),
+                ("iss", Some(oidc_service.issuer())),
             ],
         )?));
     }
@@ -313,6 +324,7 @@ async fn authorize_consent(
         .grant_consent(
             &identity.id()?,
             &pending.client_id,
+            pending.resource.as_deref(),
             pending.scopes.clone(),
             chrono::Utc::now(),
         )
@@ -327,6 +339,7 @@ async fn authorize_consent(
             redirect_uri: pending.redirect_uri.clone(),
             scopes: pending.scopes.clone(),
             nonce: pending.nonce.clone(),
+            resource: pending.resource.clone(),
             code_challenge: pending.code_challenge.clone(),
             expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
         })
@@ -337,7 +350,11 @@ async fn authorize_consent(
 
     Ok(Redirect::to(&build_redirect(
         &pending.redirect_uri,
-        &[("code", Some(&code)), ("state", pending.state.as_deref())],
+        &[
+            ("code", Some(&code)),
+            ("state", pending.state.as_deref()),
+            ("iss", Some(oidc_service.issuer())),
+        ],
     )?))
 }
 
@@ -356,7 +373,14 @@ async fn token(
     if request.grant_type == "refresh_token" {
         request.client_id = token_client_id(&headers, &request.client_id)
             .map_err(|_| IdentityError::OAuth("invalid_client"))?;
-        return refresh_tokens(&persistence_service, request).await;
+        let client = oidc_service
+            .clients
+            .resolve(&persistence_service, &request.client_id)
+            .await?;
+        if client.cimd && headers.contains_key(header::AUTHORIZATION) {
+            return Err(IdentityError::OAuth("invalid_client"));
+        }
+        return refresh_tokens(&persistence_service, &oidc_service, request).await;
     }
     if request.grant_type != "authorization_code" {
         return Err(IdentityError::OAuth("unsupported_grant_type"));
@@ -383,14 +407,16 @@ async fn token(
 
     validate_token_request(&request, &code)?;
 
-    let Some(_client) = persistence_service
-        .fetch_oauth_client(&request.client_id)
-        .await?
-    else {
-        return Err(IdentityError::BadRequest(
-            "Unknown OAuth client".to_string(),
-        ));
-    };
+    let client = oidc_service
+        .clients
+        .resolve(&persistence_service, &request.client_id)
+        .await?;
+    if !client.redirect_uris.contains(&code.redirect_uri) {
+        return Err(IdentityError::OAuth("invalid_grant"));
+    }
+    if client.cimd && headers.contains_key(header::AUTHORIZATION) {
+        return Err(IdentityError::OAuth("invalid_client"));
+    }
     if !verify_pkce(&request.code_verifier, &code.code_challenge) {
         return Err(IdentityError::BadRequest(
             "code_verifier did not match the PKCE challenge".to_string(),
@@ -405,7 +431,19 @@ async fn token(
             "Unknown authorization code".to_string(),
         ));
     }
-    let access_token = Token::random().base64();
+    let identity = persistence_service
+        .fetch_identity(&code.subject_id)
+        .await?
+        .filter(|i| matches!(i.state, crate::persistence::IdentityState::Active { .. }))
+        .ok_or(IdentityError::OAuth("invalid_grant"))?;
+    let access_token = oidc_service
+        .mint_access_token(
+            &identity,
+            &code.client_id,
+            code.resource.as_deref(),
+            &code.scopes,
+        )
+        .await?;
     let expires_in = chrono::Duration::hours(1);
     persistence_service
         .create_access_token(
@@ -413,6 +451,7 @@ async fn token(
             &code.client_id,
             &code.subject_id,
             code.scopes.clone(),
+            code.resource.clone(),
             chrono::Utc::now() + expires_in,
         )
         .await?;
@@ -457,6 +496,7 @@ async fn token(
                 &code.client_id,
                 &code.subject_id,
                 code.scopes.clone(),
+                code.resource.clone(),
                 chrono::Utc::now() + chrono::Duration::days(30),
             )
             .await?;
@@ -488,23 +528,25 @@ fn token_response(tokens: TokenResponse) -> Response {
 
 async fn refresh_tokens(
     persistence: &PersistenceService,
+    oidc: &OidcService,
     request: TokenRequest,
 ) -> Result<Response, IdentityError> {
     if request.refresh_token.is_empty() {
         return Err(IdentityError::OAuth("invalid_request"));
     }
-    if persistence
-        .fetch_oauth_client(&request.client_id)
-        .await?
-        .is_none()
-    {
-        return Err(IdentityError::OAuth("invalid_client"));
-    }
+    oidc.clients
+        .resolve(persistence, &request.client_id)
+        .await?;
     let previous = persistence
         .fetch_refresh_token(&request.refresh_token)
         .await?
         .ok_or(IdentityError::OAuth("invalid_grant"))?;
-    if previous.client_id != request.client_id {
+    if previous.client_id != request.client_id
+        || request
+            .resource
+            .as_ref()
+            .is_some_and(|r| Some(r) != previous.resource.as_ref())
+    {
         return Err(IdentityError::OAuth("invalid_grant"));
     }
     if previous
@@ -519,16 +561,14 @@ async fn refresh_tokens(
     if previous.expires_at <= chrono::Utc::now() {
         return Err(IdentityError::OAuth("invalid_grant"));
     }
-    let identity = persistence.fetch_identity(&previous.subject_id).await?;
-    if !identity.is_some_and(|identity| {
-        matches!(
-            identity.state,
-            crate::persistence::IdentityState::Active { .. }
-        )
-    }) {
+    let Some(identity) = persistence
+        .fetch_identity(&previous.subject_id)
+        .await?
+        .filter(|i| matches!(i.state, crate::persistence::IdentityState::Active { .. }))
+    else {
         persistence.revoke_refresh_token(&previous).await?;
         return Err(IdentityError::OAuth("invalid_grant"));
-    }
+    };
     let scopes = match request.scope {
         Some(scope) => {
             let scopes: Vec<String> = scope.split_whitespace().map(str::to_string).collect();
@@ -547,7 +587,14 @@ async fn refresh_tokens(
         persistence.revoke_refresh_token(&previous).await?;
         return Err(IdentityError::OAuth("invalid_grant"));
     }
-    let access_token = Token::random().base64();
+    let access_token = oidc
+        .mint_access_token(
+            &identity,
+            &previous.client_id,
+            previous.resource.as_deref(),
+            &scopes,
+        )
+        .await?;
     let lifetime = chrono::Duration::hours(1);
     persistence
         .create_access_token(
@@ -555,6 +602,7 @@ async fn refresh_tokens(
             &previous.client_id,
             &previous.subject_id,
             scopes.clone(),
+            previous.resource.clone(),
             chrono::Utc::now() + lifetime,
         )
         .await?;
@@ -577,6 +625,9 @@ async fn userinfo(
         .fetch_access_token(token)
         .await?
         .ok_or_else(|| IdentityError::BadRequest("Unknown access token".to_string()))?;
+    if access_token.resource.is_some() {
+        return Err(IdentityError::OAuth("invalid_token"));
+    }
     if access_token.expires_at < chrono::Utc::now() {
         return Err(IdentityError::BadRequest(
             "access token has expired".to_string(),
@@ -619,7 +670,7 @@ async fn continue_authorization(
     persistence_service: PersistenceService,
     oidc_service: OidcService,
     templates: Templates,
-    client: &OAuthClient,
+    client: &Client,
     pending: PendingAuthorizationRequest,
     pending_stored: bool,
 ) -> Result<Response, IdentityError> {
@@ -631,7 +682,11 @@ async fn continue_authorization(
     };
 
     let existing_consent = persistence_service
-        .fetch_consent_grant(&identity.id()?, &pending.client_id)
+        .fetch_consent_grant(
+            &identity.id()?,
+            &pending.client_id,
+            pending.resource.as_deref(),
+        )
         .await?;
     if consent_satisfies_request(existing_consent.as_ref(), &pending.scopes) {
         let code = Token::random().base64();
@@ -643,6 +698,7 @@ async fn continue_authorization(
                 redirect_uri: pending.redirect_uri.clone(),
                 scopes: pending.scopes.clone(),
                 nonce: pending.nonce.clone(),
+                resource: pending.resource.clone(),
                 code_challenge: pending.code_challenge.clone(),
                 expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
             })
@@ -654,7 +710,11 @@ async fn continue_authorization(
         }
         return Ok(Redirect::to(&build_redirect(
             &pending.redirect_uri,
-            &[("code", Some(&code)), ("state", pending.state.as_deref())],
+            &[
+                ("code", Some(&code)),
+                ("state", pending.state.as_deref()),
+                ("iss", Some(oidc_service.issuer())),
+            ],
         )?)
         .into_response());
     }
@@ -667,6 +727,9 @@ async fn continue_authorization(
         "authorize",
         &json!({
             "client_name": client.name,
+            "client_id": client.client_id,
+            "redirect_uri": pending.redirect_uri,
+            "resource": pending.resource,
             "idp_basename": oidc_service.issuer_basename(),
             "identity_email": identity.email,
             "scopes": pending.scopes,
@@ -680,7 +743,7 @@ async fn continue_authorization(
 
 fn validate_authorization_request(
     request: AuthorizationRequest,
-    client: &OAuthClient,
+    client: &Client,
 ) -> Result<PendingAuthorizationRequest, IdentityError> {
     if request.response_type != "code" {
         return Err(IdentityError::BadRequest(
@@ -692,7 +755,18 @@ fn validate_authorization_request(
             "redirect_uri is not registered for this client".to_string(),
         ));
     }
-    let scopes = parse_scopes(&request.scope)?;
+    if let Some(resource) = request.resource.as_deref() {
+        validate_resource(resource)?;
+    }
+    if client.cimd && request.resource.is_none() {
+        return Err(IdentityError::OAuth("invalid_target"));
+    }
+    let scope = if request.scope.is_empty() && request.resource.is_some() {
+        "email"
+    } else {
+        &request.scope
+    };
+    let scopes = parse_scopes(scope)?;
     for scope in &scopes {
         if !allowed_scopes().iter().any(|allowed| allowed == scope) {
             return Err(IdentityError::BadRequest(format!(
@@ -719,12 +793,37 @@ fn validate_authorization_request(
 
     Ok(PendingAuthorizationRequest {
         client_id: client.client_id.clone(),
+        resource: request.resource,
         redirect_uri: request.redirect_uri,
         scopes,
         state: request.state,
         nonce: request.nonce,
         code_challenge,
     })
+}
+
+fn validate_resource(resource: &str) -> Result<(), IdentityError> {
+    let url = Url::parse(resource).map_err(|_| IdentityError::OAuth("invalid_target"))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || url.fragment().is_some()
+        || url.query().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(IdentityError::OAuth("invalid_target"));
+    }
+    Ok(())
+}
+
+fn validate_pending_client(
+    pending: &PendingAuthorizationRequest,
+    client: &Client,
+) -> Result<(), IdentityError> {
+    if !client.redirect_uris.contains(&pending.redirect_uri) {
+        return Err(IdentityError::OAuth("invalid_request"));
+    }
+    Ok(())
 }
 
 fn parse_scopes(scope: &str) -> Result<Vec<String>, IdentityError> {
@@ -738,11 +837,6 @@ fn parse_scopes(scope: &str) -> Result<Vec<String>, IdentityError> {
             "scope must not be empty".to_string(),
         ));
     }
-    if !scopes.iter().any(|scope| scope == "openid") {
-        return Err(IdentityError::BadRequest(
-            "scope must include 'openid'".to_string(),
-        ));
-    }
     Ok(scopes)
 }
 
@@ -750,6 +844,9 @@ fn validate_token_request(
     request: &TokenRequest,
     code: &AuthorizationCode,
 ) -> Result<(), IdentityError> {
+    if code.resource != request.resource {
+        return Err(IdentityError::OAuth("invalid_target"));
+    }
     if code.client_id != request.client_id {
         return Err(IdentityError::BadRequest(
             "authorization code was not issued to this client".to_string(),
@@ -902,12 +999,13 @@ mod tests {
         CreateOAuthClientRequest, PendingAuthorizationRequest, TokenRequest, PENDING_AUTHORIZATION,
     };
     use crate::auth::IDENTITY;
+    use crate::client_metadata::Client;
     use crate::config::EmailConfig;
     use crate::error::IdentityError;
     use crate::invite::InviteService;
     use crate::oidc::OidcService;
     use crate::persistence::{
-        mem_db, AuthorizationCode, ConsentGrant, Credential, Identity, IdentityState, OAuthClient,
+        mem_db, AuthorizationCode, ConsentGrant, Credential, Identity, IdentityState,
         PersistenceService,
     };
     use crate::register::RegistrationService;
@@ -954,18 +1052,19 @@ mod tests {
         }
     }
 
-    fn client() -> OAuthClient {
-        OAuthClient {
+    fn client() -> Client {
+        Client {
             client_id: "client-1".to_string(),
             name: "Example client".to_string(),
             redirect_uris: vec!["http://localhost:4000/callback".to_string()],
-            id: RecordId::new("oauth_client", "client-1"),
+            cimd: false,
         }
     }
 
     #[test]
     fn validate_authorization_request_accepts_valid_request() {
         let request = AuthorizationRequest {
+            resource: None,
             response_type: "code".to_string(),
             client_id: "client-1".to_string(),
             redirect_uri: "http://localhost:4000/callback".to_string(),
@@ -989,6 +1088,7 @@ mod tests {
     #[test]
     fn validate_authorization_request_rejects_unregistered_redirect_uri() {
         let request = AuthorizationRequest {
+            resource: None,
             response_type: "code".to_string(),
             client_id: "client-1".to_string(),
             redirect_uri: "http://localhost:5000/callback".to_string(),
@@ -1004,8 +1104,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_authorization_request_rejects_missing_openid_scope() {
+    fn validate_authorization_request_accepts_oauth_without_openid() {
         let request = AuthorizationRequest {
+            resource: None,
             response_type: "code".to_string(),
             client_id: "client-1".to_string(),
             redirect_uri: "http://localhost:4000/callback".to_string(),
@@ -1016,8 +1117,7 @@ mod tests {
             code_challenge_method: Some("S256".to_string()),
         };
 
-        let err = validate_authorization_request(request, &client()).unwrap_err();
-        assert!(matches!(err, IdentityError::BadRequest(_)));
+        assert!(validate_authorization_request(request, &client()).is_ok());
     }
 
     fn token_request() -> TokenRequest {
@@ -1029,11 +1129,13 @@ mod tests {
             code_verifier: "verifier-123".to_string(),
             refresh_token: String::new(),
             scope: None,
+            resource: None,
         }
     }
 
     fn authorization_code(code_challenge: String) -> AuthorizationCode {
         AuthorizationCode {
+            resource: None,
             code: "code-123".to_string(),
             client_id: "client-1".to_string(),
             subject_id: "identity:alice".to_string(),
@@ -1062,6 +1164,7 @@ mod tests {
     #[test]
     fn consent_satisfies_request_requires_all_scopes() {
         let consent = ConsentGrant {
+            resource: None,
             subject_id: "identity:alice".to_string(),
             client_id: "client-1".to_string(),
             scopes: vec!["openid".to_string(), "email".to_string()],
@@ -1230,6 +1333,7 @@ mod tests {
     #[tokio::test]
     async fn refresh_validates_client_scope_expiry_identity_and_deletion() -> anyhow::Result<()> {
         let ps = PersistenceService::new(mem_db().await?);
+        let oidc = OidcService::new("https://issuer.example", ps.clone());
         let user = ps.persist_identity(admin_identity()).await?;
         for client in ["client-1", "other"] {
             ps.create_oauth_client(client, client, vec!["http://localhost/callback".into()])
@@ -1241,6 +1345,7 @@ mod tests {
             "client-1",
             &user,
             scopes.clone(),
+            None,
             Utc::now() + Duration::days(30),
         )
         .await?;
@@ -1249,6 +1354,7 @@ mod tests {
             refresh_token: token.into(),
             client_id: client.into(),
             scope: scope.map(str::to_string),
+            resource: None,
             ..token_request()
         };
         for (token, client, scope, expected) in [
@@ -1259,13 +1365,17 @@ mod tests {
             ("valid", "client-1", Some("openid groups"), "invalid_scope"),
             ("valid", "client-1", Some(""), "invalid_scope"),
         ] {
-            let error = super::refresh_tokens(&ps, refresh_request(token, client, scope))
+            let error = super::refresh_tokens(&ps, &oidc, refresh_request(token, client, scope))
                 .await
                 .unwrap_err();
             assert!(matches!(error, IdentityError::OAuth(code) if code == expected));
         }
-        let response =
-            super::refresh_tokens(&ps, refresh_request("valid", "client-1", Some("email"))).await?;
+        let response = super::refresh_tokens(
+            &ps,
+            &oidc,
+            refresh_request("valid", "client-1", Some("email")),
+        )
+        .await?;
         let renewed: Value = serde_json::from_slice(&response_body(response).await)?;
         assert_eq!(renewed["scope"], "email");
         assert!(renewed.get("id_token").is_none());
@@ -1277,6 +1387,7 @@ mod tests {
         assert!(matches!(
             super::refresh_tokens(
                 &ps,
+                &oidc,
                 refresh_request(new_refresh, "client-1", Some("openid"))
             )
             .await,
@@ -1296,6 +1407,7 @@ mod tests {
             "client-1",
             &user,
             scopes.clone(),
+            None,
             Utc::now() - Duration::seconds(1),
         )
         .await?;
@@ -1304,12 +1416,13 @@ mod tests {
             "client-1",
             "missing",
             scopes.clone(),
+            None,
             Utc::now() + Duration::days(1),
         )
         .await?;
         for token in ["expired", "missing-user"] {
             assert!(matches!(
-                super::refresh_tokens(&ps, refresh_request(token, "client-1", None)).await,
+                super::refresh_tokens(&ps, &oidc, refresh_request(token, "client-1", None)).await,
                 Err(IdentityError::OAuth("invalid_grant"))
             ));
         }
@@ -1318,6 +1431,7 @@ mod tests {
             "client-1",
             &user,
             scopes,
+            None,
             Utc::now() + Duration::days(1),
         )
         .await?;
@@ -1327,7 +1441,7 @@ mod tests {
         };
         ps.update_identity(&identity).await?;
         assert!(matches!(
-            super::refresh_tokens(&ps, refresh_request("inactive", "client-1", None)).await,
+            super::refresh_tokens(&ps, &oidc, refresh_request("inactive", "client-1", None)).await,
             Err(IdentityError::OAuth("invalid_grant"))
         ));
         assert!(ps.fetch_refresh_token("inactive").await?.is_none());
@@ -1448,7 +1562,7 @@ mod tests {
         assert_eq!(authorize.status(), StatusCode::OK);
         let authorize_body = String::from_utf8(response_body(authorize).await)?;
         assert!(authorize_body
-            .contains("Example client</strong> wants to use this service for logins."));
+            .contains("Example client</strong> is requesting access using your account."));
         assert!(authorize_body.contains("requesting your group memberships"));
 
         let consent = app
@@ -1656,6 +1770,7 @@ mod tests {
             .grant_consent(
                 &user_id,
                 "client-1",
+                None,
                 vec!["openid".to_string(), "email".to_string()],
                 Utc::now(),
             )
@@ -1973,6 +2088,260 @@ mod tests {
             .fetch_oauth_client("configured-client")
             .await?
             .is_none());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn cimd_flow_binds_jwt_consent_and_refresh_to_resource() -> anyhow::Result<()> {
+        let db = mem_db().await?;
+        let persistence = Arc::new(PersistenceService::new(db.clone()));
+        let user_id = persistence.persist_identity(admin_identity()).await?;
+        let issuer = "https://identity.example";
+        let client_id = "https://client.example/oauth/client.json";
+        let resource = "https://mcp.example/mcp";
+        let oidc = Arc::new(OidcService::new(issuer, persistence.as_ref().clone()));
+        // Seed a validated cached document, keeping the HTTP flow deterministic.
+        oidc.clients
+            .cache_document(
+                client_id,
+                &serde_json::to_vec(&json!({
+                    "client_id": client_id, "client_name": "MCP client",
+                    "redirect_uris": ["https://client.example/callback"],
+                    "token_endpoint_auth_method": "none",
+                    "grant_types": ["authorization_code", "refresh_token"]
+                }))?,
+            )
+            .await?;
+        let app = test_app(
+            AppState {
+                ps: persistence.clone(),
+                is: Arc::new(InviteService::new(
+                    persistence.clone(),
+                    &EmailConfig {
+                        relay_host: "localhost".into(),
+                        username: None,
+                        password_file: None,
+                        sender_email: "test@example.com".into(),
+                    },
+                    issuer,
+                )?),
+                templates: Arc::new(Templates::new()?),
+                oidc: oidc.clone(),
+                rs: Arc::new(RegistrationService::new(issuer)?),
+                bypass_authentication: false,
+            },
+            db,
+        );
+        assert!(persistence.fetch_oauth_client(client_id).await?.is_none());
+        let discovery = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/.well-known/oauth-authorization-server")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        let metadata: Value = serde_json::from_slice(&response_body(discovery).await)?;
+        assert_eq!(metadata["client_id_metadata_document_supported"], true);
+        assert_eq!(
+            metadata["authorization_response_iss_parameter_supported"],
+            true
+        );
+        assert!(metadata.get("registration_endpoint").is_none());
+        let login = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/test-login?user_id={user_id}"))
+                    .body(Body::empty())?,
+            )
+            .await?;
+        let cookie = session_cookie(&login);
+        let verifier = "a".repeat(43);
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let authorize_url = |resource: &str| {
+            let mut url = Url::parse(&format!("{issuer}/authorize")).unwrap();
+            url.query_pairs_mut().extend_pairs([
+                ("client_id", client_id),
+                ("response_type", "code"),
+                ("redirect_uri", "https://client.example/callback"),
+                ("resource", resource),
+                ("scope", "email groups offline_access"),
+                ("state", "state-123"),
+                ("code_challenge", challenge.as_str()),
+                ("code_challenge_method", "S256"),
+            ]);
+            format!("{}?{}", url.path(), url.query().unwrap())
+        };
+        let consent_page = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(authorize_url(resource))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(consent_page.status(), StatusCode::OK);
+        let html = String::from_utf8(response_body(consent_page).await)?;
+        assert!(html.contains(resource));
+        assert!(html.contains("https://client.example/callback"));
+        let approved = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/authorize/consent")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("decision=approve"))?,
+            )
+            .await?;
+        assert_eq!(approved.status(), StatusCode::SEE_OTHER);
+        let location = Url::parse(approved.headers()[header::LOCATION].to_str()?)?;
+        let query: std::collections::HashMap<_, _> = location.query_pairs().into_owned().collect();
+        assert_eq!(query["iss"], issuer);
+        assert_eq!(query["state"], "state-123");
+        let code = &query["code"];
+        let form = |pairs: &[(&str, &str)]| -> anyhow::Result<Request<Body>> {
+            let body = url::form_urlencoded::Serializer::new(String::new())
+                .extend_pairs(pairs.iter().copied())
+                .finish();
+            Ok(Request::builder()
+                .method("POST")
+                .uri("/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(body))?)
+        };
+        for (audience, proof, expected) in [
+            (
+                "https://other.example/mcp",
+                verifier.as_str(),
+                "invalid_target",
+            ),
+            (resource, "wrong", "pkce"),
+        ] {
+            let rejected = app
+                .clone()
+                .oneshot(form(&[
+                    ("grant_type", "authorization_code"),
+                    ("client_id", client_id),
+                    ("code", code),
+                    ("redirect_uri", "https://client.example/callback"),
+                    ("resource", audience),
+                    ("code_verifier", proof),
+                ])?)
+                .await?;
+            assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+            if expected != "pkce" {
+                let body: Value = serde_json::from_slice(&response_body(rejected).await)?;
+                assert_eq!(body["error"], expected);
+            }
+        }
+        let exchanged = app
+            .clone()
+            .oneshot(form(&[
+                ("grant_type", "authorization_code"),
+                ("client_id", client_id),
+                ("code", code),
+                ("redirect_uri", "https://client.example/callback"),
+                ("resource", resource),
+                ("code_verifier", &verifier),
+            ])?)
+            .await?;
+        assert_eq!(exchanged.status(), StatusCode::OK);
+        let tokens: TokenJson = serde_json::from_slice(&response_body(exchanged).await)?;
+        assert!(tokens.id_token.is_none());
+        let header = jsonwebtoken::decode_header(&tokens.access_token)?;
+        assert_eq!(header.typ.as_deref(), Some("at+jwt"));
+        let jwks: jsonwebtoken::jwk::JwkSet =
+            serde_json::from_value(serde_json::to_value(oidc.jwks().await?)?)?;
+        let key = jsonwebtoken::DecodingKey::from_jwk(
+            jwks.find(header.kid.as_deref().unwrap()).unwrap(),
+        )?;
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::ES256);
+        validation.set_issuer(&[issuer]);
+        validation.set_audience(&[resource]);
+        let claims = jsonwebtoken::decode::<Value>(&tokens.access_token, &key, &validation)?.claims;
+        assert_eq!(claims["sub"], user_id);
+        assert_eq!(claims["email"], "root@example.com");
+        assert_eq!(claims["client_id"], client_id);
+        assert_eq!(claims["groups"], json!([]));
+        assert_eq!(
+            claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+            3600
+        );
+        assert!(claims["jti"].as_str().is_some());
+        validation.set_audience(&["https://other.example/mcp"]);
+        assert!(jsonwebtoken::decode::<Value>(&tokens.access_token, &key, &validation).is_err());
+        validation.set_audience(&[resource]);
+        validation.set_issuer(&["https://other-issuer.example"]);
+        assert!(jsonwebtoken::decode::<Value>(&tokens.access_token, &key, &validation).is_err());
+        validation.set_issuer(&[issuer]);
+        let mut tampered = tokens.access_token.clone();
+        let pos = tampered.find('.').unwrap() + 1;
+        tampered.replace_range(pos..pos + 1, "X");
+        assert!(jsonwebtoken::decode::<Value>(&tampered, &key, &validation).is_err());
+        let refresh = tokens.refresh_token.unwrap();
+        let rejected = app
+            .clone()
+            .oneshot(form(&[
+                ("grant_type", "refresh_token"),
+                ("client_id", client_id),
+                ("refresh_token", &refresh),
+                ("resource", "https://other.example/mcp"),
+            ])?)
+            .await?;
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        // Omitting resource on refresh retains its original audience.
+        let renewed = app
+            .clone()
+            .oneshot(form(&[
+                ("grant_type", "refresh_token"),
+                ("client_id", client_id),
+                ("refresh_token", &refresh),
+            ])?)
+            .await?;
+        assert_eq!(renewed.status(), StatusCode::OK);
+        let renewed: TokenJson = serde_json::from_slice(&response_body(renewed).await)?;
+        let claims =
+            jsonwebtoken::decode::<Value>(&renewed.access_token, &key, &validation)?.claims;
+        assert_eq!(claims["aud"], resource);
+        assert_eq!(claims["sub"], user_id);
+        // Consent is reused for this resource, but never another MCP server.
+        let same = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(authorize_url(resource))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(same.status(), StatusCode::SEE_OTHER);
+        let other = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(authorize_url("https://other.example/mcp"))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(other.status(), StatusCode::OK);
+        // A resource's JWT cannot be used as a credential at userinfo either.
+        let userinfo = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/userinfo")
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", tokens.access_token),
+                    )
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(userinfo.status(), StatusCode::BAD_REQUEST);
         Ok(())
     }
 }

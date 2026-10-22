@@ -10,8 +10,13 @@
 <main>
 <section class="hero">
 <p class="eyebrow">Authorization request</p>
-<h1>Consent to login</h1>
-<p class="lede"><strong>{{client_name}}</strong> wants to use this service for logins.</p>
+<h1>Authorize access</h1>
+<p class="lede"><strong>{{client_name}}</strong> is requesting access using your account.</p>
+<p class="muted">Client: {{client_id}}</p>
+<p class="muted">Callback: {{redirect_uri}}</p>
+{{#if resource}}
+<p>Allow access to <strong>{{resource}}</strong>?</p>
+{{/if}}
 </section>
 <section class="panel" aria-labelledby="consent-title">
 <h2 id="consent-title">Review request</h2>

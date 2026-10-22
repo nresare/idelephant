@@ -96,6 +96,7 @@ pub struct UserSummary {
 
 #[derive(Serialize, SurrealValue)]
 struct NewAuthorizationCode {
+    resource: Option<String>,
     code: String,
     client_id: String,
     subject_id: String,
@@ -107,6 +108,7 @@ struct NewAuthorizationCode {
 }
 
 pub struct CreateAuthorizationCode {
+    pub resource: Option<String>,
     pub code: String,
     pub client_id: String,
     pub subject_id: String,
@@ -119,6 +121,7 @@ pub struct CreateAuthorizationCode {
 
 #[derive(Serialize, SurrealValue)]
 struct NewAccessToken {
+    resource: Option<String>,
     token_hash: String,
     client_id: String,
     subject_id: String,
@@ -128,6 +131,7 @@ struct NewAccessToken {
 
 #[derive(Serialize, SurrealValue)]
 struct NewConsentGrant {
+    resource: Option<String>,
     subject_id: String,
     client_id: String,
     scopes: Vec<String>,
@@ -169,6 +173,7 @@ pub struct OAuthClient {
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct AuthorizationCode {
+    pub resource: Option<String>,
     pub code: String,
     pub client_id: String,
     pub subject_id: String,
@@ -182,6 +187,7 @@ pub struct AuthorizationCode {
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct AccessToken {
+    pub resource: Option<String>,
     pub token_hash: String,
     pub client_id: String,
     pub subject_id: String,
@@ -194,6 +200,7 @@ pub struct AccessToken {
 // storing bearer credentials. Rotation preserves the family's absolute expiry.
 #[derive(Debug, Clone, SurrealValue)]
 pub struct RefreshToken {
+    pub resource: Option<String>,
     pub id: RecordId,
     pub token_hash: String,
     pub used_hashes: Vec<String>,
@@ -205,6 +212,7 @@ pub struct RefreshToken {
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct ConsentGrant {
+    pub resource: Option<String>,
     pub subject_id: String,
     pub client_id: String,
     pub scopes: Vec<String>,
@@ -297,13 +305,15 @@ async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
          DEFINE INDEX IF NOT EXISTS authorizationCode ON authorization_code FIELDS code UNIQUE;
          DEFINE INDEX IF NOT EXISTS accessTokenHash ON access_token FIELDS token_hash UNIQUE;
          DEFINE INDEX IF NOT EXISTS refreshTokenHash ON refresh_token FIELDS token_hash UNIQUE;
-         DEFINE INDEX IF NOT EXISTS consentGrantBySubjectClient ON consent_grant FIELDS subject_id, client_id UNIQUE;
+         REMOVE INDEX IF EXISTS consentGrantBySubjectClient ON consent_grant;
+         DEFINE INDEX IF NOT EXISTS consentGrantBySubjectClientResource ON consent_grant FIELDS subject_id, client_id, resource UNIQUE;
          DEFINE INDEX IF NOT EXISTS jwkKeyKid ON jwk_key FIELDS kid UNIQUE;
          DEFINE INDEX IF NOT EXISTS jwkKeyActiveFrom ON jwk_key FIELDS active_from UNIQUE;
          DEFINE TABLE IF NOT EXISTS sessions;"
 
     )
-    .await?;
+    .await?
+    .check()?;
     Ok(())
 }
 
@@ -665,6 +675,7 @@ impl PersistenceService {
                 subject_id: code.subject_id,
                 redirect_uri: code.redirect_uri,
                 scopes: code.scopes,
+                resource: code.resource,
                 nonce: code.nonce,
                 code_challenge: code.code_challenge,
                 expires_at: code.expires_at,
@@ -702,6 +713,7 @@ impl PersistenceService {
         client_id: &str,
         subject_id: &str,
         scopes: Vec<String>,
+        resource: Option<String>,
         expires_at: DateTime<Utc>,
     ) -> Result<String, IdentityError> {
         let result: Record = self
@@ -712,6 +724,7 @@ impl PersistenceService {
                 client_id: client_id.to_string(),
                 subject_id: subject_id.to_string(),
                 scopes,
+                resource,
                 expires_at,
             })
             .await?
@@ -737,13 +750,15 @@ impl PersistenceService {
         client_id: &str,
         subject_id: &str,
         scopes: Vec<String>,
+        resource: Option<String>,
         expires_at: DateTime<Utc>,
     ) -> Result<(), IdentityError> {
-        self.db.query("CREATE refresh_token SET token_hash = $hash, used_hashes = [], client_id = $client, subject_id = $subject, scopes = $scopes, expires_at = $expires")
+        self.db.query("CREATE refresh_token SET token_hash = $hash, used_hashes = [], client_id = $client, subject_id = $subject, scopes = $scopes, resource = $resource, expires_at = $expires")
             .bind(("hash", refresh_token_hash(token)))
             .bind(("client", client_id.to_string()))
             .bind(("subject", subject_id.to_string()))
             .bind(("scopes", scopes))
+            .bind(("resource", resource))
             .bind(("expires", expires_at))
             .await?.check()?;
         Ok(())
@@ -785,10 +800,13 @@ impl PersistenceService {
         &self,
         subject_id: &str,
         client_id: &str,
+        resource: Option<&str>,
         scopes: Vec<String>,
         created_at: DateTime<Utc>,
     ) -> Result<String, IdentityError> {
-        let existing = self.fetch_consent_grant(subject_id, client_id).await?;
+        let existing = self
+            .fetch_consent_grant(subject_id, client_id, resource)
+            .await?;
         if let Some(existing) = existing {
             let updated: Option<ConsentGrant> = self
                 .db
@@ -796,6 +814,7 @@ impl PersistenceService {
                 .content(NewConsentGrant {
                     subject_id: subject_id.to_string(),
                     client_id: client_id.to_string(),
+                    resource: resource.map(str::to_string),
                     scopes,
                     created_at,
                 })
@@ -812,6 +831,7 @@ impl PersistenceService {
             .content(NewConsentGrant {
                 subject_id: subject_id.to_string(),
                 client_id: client_id.to_string(),
+                resource: resource.map(str::to_string),
                 scopes,
                 created_at,
             })
@@ -824,14 +844,16 @@ impl PersistenceService {
         &self,
         subject_id: &str,
         client_id: &str,
+        resource: Option<&str>,
     ) -> Result<Option<ConsentGrant>, IdentityError> {
         let mut result = self
             .db
             .query(
-                "SELECT * FROM consent_grant WHERE subject_id = $subject_id AND client_id = $client_id LIMIT 1",
+                "SELECT * FROM consent_grant WHERE subject_id = $subject_id AND client_id = $client_id AND resource = $resource LIMIT 1",
             )
             .bind(("subject_id", subject_id.to_string()))
             .bind(("client_id", client_id.to_string()))
+            .bind(("resource", resource.map(str::to_string)))
             .await?;
         Ok(result.take(0)?)
     }
@@ -1068,6 +1090,7 @@ mod tests {
         let scopes = vec!["openid".to_string(), "email".to_string()];
         let nonce = Some("nonce-123".to_string());
         ps.create_authorization_code(CreateAuthorizationCode {
+            resource: None,
             code: "code-hash".to_string(),
             client_id: "client-1".to_string(),
             subject_id: "identity:alice".to_string(),
@@ -1097,8 +1120,15 @@ mod tests {
     async fn refresh_rotation_is_single_use_and_stores_only_hashes() -> Result<()> {
         let ps = PersistenceService::new(mem_db().await?);
         let expiry = Utc::now() + Duration::days(30);
-        ps.create_refresh_token("original", "client", "alice", vec!["openid".into()], expiry)
-            .await?;
+        ps.create_refresh_token(
+            "original",
+            "client",
+            "alice",
+            vec!["openid".into()],
+            None,
+            expiry,
+        )
+        .await?;
         let original = ps.fetch_refresh_token("original").await?.unwrap();
         assert_ne!(original.token_hash, "original");
         let (first, second) = tokio::join!(
@@ -1127,6 +1157,7 @@ mod tests {
             "client-1",
             "identity:alice",
             scopes.clone(),
+            None,
             expires_at,
         )
         .await?;
@@ -1228,12 +1259,13 @@ mod tests {
             .grant_consent(
                 "identity:alice",
                 "client-1",
+                None,
                 vec!["openid".to_string()],
                 created_at,
             )
             .await?;
         let fetched = ps
-            .fetch_consent_grant("identity:alice", "client-1")
+            .fetch_consent_grant("identity:alice", "client-1", None)
             .await?
             .unwrap();
         assert_eq!(fetched.scopes, vec!["openid".to_string()]);
@@ -1243,6 +1275,7 @@ mod tests {
             .grant_consent(
                 "identity:alice",
                 "client-1",
+                None,
                 vec!["openid".to_string(), "email".to_string()],
                 updated_at,
             )
@@ -1250,7 +1283,7 @@ mod tests {
         assert_eq!(first_id, second_id);
 
         let fetched = ps
-            .fetch_consent_grant("identity:alice", "client-1")
+            .fetch_consent_grant("identity:alice", "client-1", None)
             .await?
             .unwrap();
         assert_eq!(

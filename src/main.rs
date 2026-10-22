@@ -1,4 +1,5 @@
 mod auth;
+mod client_metadata;
 mod config;
 mod embed;
 mod error;

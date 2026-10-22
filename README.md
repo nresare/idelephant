@@ -105,10 +105,75 @@ registered, and authorization code exchanges require the matching redirect URI
 and S256 PKCE verifier. If both Basic and form client IDs are supplied, they must
 match.
 
+## MCP authorization
+
+idElephant supports public OAuth clients using Client ID Metadata Documents
+(CIMD), authorization code flow with S256 PKCE, and signed JWT access tokens.
+Dynamic client registration is not implemented. Both
+`/.well-known/oauth-authorization-server` and `/.well-known/openid-configuration`
+advertise the issuer, endpoints, PKCE, and CIMD support. Authorization redirects
+include the issuer in `iss`.
+
+An MCP server must serve protected-resource metadata identifying itself and
+idElephant's public `origin` as its authorization server, for example:
+
+```json
+{
+  "resource": "https://tools.example.com/mcp",
+  "authorization_servers": ["https://identity.example.com"],
+  "scopes_supported": ["email"]
+}
+```
+
+Publish this at the MCP server's `/.well-known/oauth-protected-resource` endpoint
+(or the appropriate resource-specific well-known path), and return its URL in the
+`resource_metadata` parameter of a `WWW-Authenticate: Bearer` challenge on HTTP 401.
+The MCP server implements these endpoints and validates the bearer access token on
+every protected request.
+
+CIMD clients use their HTTPS metadata document URL as `client_id`. idElephant
+fetches the document and checks its matching `client_id`, `client_name`, callback
+URIs, and support for token authentication method `none`. It also recognizes the
+plural `token_endpoint_auth_methods_supported` field, allowing `none` when it is
+one of the client's supported methods. Signed client assertions (`private_key_jwt`)
+are not supported. Metadata must be served directly, without redirects, from a
+public HTTPS address. Fetches have time and size limits; cached documents expire
+within five minutes, or earlier according to `Cache-Control`.
+
+Include the same `resource` in the authorization request and authorization-code
+token exchange. It must be an absolute HTTPS URI without credentials, a query, or
+a fragment. CIMD requests require it; manually registered OIDC clients can omit it
+and receive tokens addressed to idElephant's `/userinfo` endpoint. Resource
+identifiers are compared exactly, including paths and trailing slashes. Consent
+is remembered separately for each user, client, and resource.
+
+Request `email` to include the user's email, `groups` to include group names, and
+`offline_access` for rotating refresh tokens. `openid` is optional for OAuth;
+requesting it additionally returns an ID token addressed to the client. A resource
+request that omits scopes defaults to `email`. Custom API scopes are not currently
+supported. The MCP server applies its own permissions using the authenticated
+user's identity.
+
+Access tokens are ES256-signed JWTs with `typ: at+jwt`, a signing-key `kid`, and
+claims `iss`, `sub`, `aud`, `client_id`, `iat`, `exp`, `jti`, and `scope`. Email and
+groups are included only with their corresponding scopes. Use `sub` as the stable
+account identifier; email can change. Keys are published at `/jwks.json`.
+
+The MCP server must verify the signature using the discovered JWKS, allow only
+ES256, require `typ: at+jwt`, check expiry, require the configured issuer, and
+require its own exact resource identifier as the audience. Reject ID tokens and
+tokens addressed to other MCP servers. Do not merely decode the JWT. Locally
+validated JWTs remain usable until their one-hour expiry even after server-side
+revocation; removing a client or refresh grant prevents future renewals. Resource
+access tokens are not accepted by `/userinfo`.
+
+Refresh requests may repeat the original resource or omit it to retain that
+audience. They cannot switch resources. Configure the MCP server and idElephant
+with HTTPS public URLs when connecting Claude or ChatGPT.
+
 ## Refresh tokens
 
-Request `offline_access` alongside `openid` to receive a refresh token after user
-consent. To renew access, POST a form to `/token` containing
+Request `offline_access` to receive a refresh token after user consent. To renew access, POST a form to `/token` containing
 `grant_type=refresh_token`, `client_id`, and `refresh_token`. The same Basic client
 ID handling described above is supported. No redirect URI or PKCE verifier is
 required for refresh requests.
@@ -121,7 +186,7 @@ include a new ID token.
 
 An optional `scope` field can reduce the granted scopes; omitted scopes retain the
 current grant. Reduced scopes also apply to subsequent refreshes. Tokens are bound
-to their registered client and an active user. Reusing a replaced refresh token
+to their client, resource, and an active user. Reusing a replaced refresh token
 revokes that entire refresh-token family, requiring a new authorization. Previously
 issued access tokens remain valid until their own expiry.
 
