@@ -19,11 +19,14 @@ const TOKEN_TTL_HOURS: i64 = 1;
 pub struct OidcService {
     issuer: String,
     persistence: PersistenceService,
+    pub clients: crate::client_metadata::ClientMetadataService,
 }
 
 #[derive(Serialize, Clone)]
 pub struct OpenidConfiguration {
     issuer: String,
+    client_id_metadata_document_supported: bool,
+    authorization_response_iss_parameter_supported: bool,
     authorization_endpoint: String,
     token_endpoint: String,
     userinfo_endpoint: String,
@@ -69,6 +72,22 @@ struct IdTokenClaims<'a> {
     groups: Option<&'a [String]>,
 }
 
+#[derive(Serialize)]
+struct AccessTokenClaims<'a> {
+    iss: &'a str,
+    sub: &'a str,
+    aud: &'a str,
+    client_id: &'a str,
+    exp: i64,
+    iat: i64,
+    jti: String,
+    scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    groups: Option<&'a [String]>,
+}
+
 struct PreparedKey {
     kid: String,
     private_key_der: Vec<u8>,
@@ -79,12 +98,15 @@ impl OidcService {
         Self {
             issuer: issuer.to_string(),
             persistence,
+            clients: crate::client_metadata::ClientMetadataService::default(),
         }
     }
 
     pub fn configuration(&self) -> OpenidConfiguration {
         OpenidConfiguration {
             issuer: self.issuer.clone(),
+            client_id_metadata_document_supported: true,
+            authorization_response_iss_parameter_supported: true,
             authorization_endpoint: format!("{}/authorize", self.issuer),
             token_endpoint: format!("{}/token", self.issuer),
             userinfo_endpoint: format!("{}/userinfo", self.issuer),
@@ -146,6 +168,57 @@ impl OidcService {
     ) -> Result<String, IdentityError> {
         self.mint_id_token_at(subject, audience, nonce, email, groups, Utc::now())
             .await
+    }
+
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    pub async fn mint_access_token(
+        &self,
+        identity: &crate::persistence::Identity,
+        client_id: &str,
+        resource: Option<&str>,
+        scopes: &[String],
+    ) -> Result<String, IdentityError> {
+        let now = Utc::now();
+        self.reconcile_keys(now).await?;
+        let key = self
+            .persistence
+            .fetch_signing_key_for_time(now)
+            .await?
+            .ok_or_else(|| IdentityError::Logic("No active signing key".into()))?;
+        let subject = identity.id()?;
+        let groups = if scopes.iter().any(|s| s == "groups") {
+            Some(self.persistence.group_names_for_user(&subject).await?)
+        } else {
+            None
+        };
+        let userinfo = format!("{}/userinfo", self.issuer);
+        let claims = AccessTokenClaims {
+            iss: &self.issuer,
+            sub: &subject,
+            aud: resource.unwrap_or(&userinfo),
+            client_id,
+            exp: (now + Duration::hours(TOKEN_TTL_HOURS)).timestamp(),
+            iat: now.timestamp(),
+            jti: crate::util::Token::random().base64(),
+            scope: scopes.join(" "),
+            email: scopes
+                .iter()
+                .any(|s| s == "email")
+                .then_some(identity.email.as_str()),
+            groups: groups.as_deref(),
+        };
+        let mut header = Header::new(Algorithm::ES256);
+        header.typ = Some("at+jwt".into());
+        header.kid = Some(key.kid);
+        jsonwebtoken::encode(
+            &header,
+            &claims,
+            &EncodingKey::from_ec_der(&key.private_key_der),
+        )
+        .map_err(|e| anyhow!(e).into())
     }
 
     async fn jwks_at(&self, now: DateTime<Utc>) -> Result<JwksResponse, IdentityError> {
