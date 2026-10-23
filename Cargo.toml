@@ -46,9 +46,9 @@ jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 p256 = { workspace = true, features = ["pkcs8", "pem"] }
 zqlu = { workspace = true }
 bytes = "1.11"
-opentelemetry = { version = "0.32", default-features = false, features = ["trace"] }
-opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace"] }
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "grpc-tonic", "tls-ring", "tls-webpki-roots"] }
+opentelemetry = { version = "0.33", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "grpc-tonic", "tls-ring", "tls-webpki-roots"] }
 
 [workspace.dependencies]
 serde_json = { version = "1.0", features = ["preserve_order"] }
@@ -70,8 +70,8 @@ zqlu = "0.3"
 
 
 [dev-dependencies]
-opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace", "testing"] }
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["trace", "gen-tonic"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "testing"] }
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["trace", "gen-tonic"] }
 tonic = { version = "0.14", features = ["transport"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 surrealdb = { version = "3", default-features = false, features = ["kv-mem"] }
