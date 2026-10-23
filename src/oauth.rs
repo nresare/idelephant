@@ -411,7 +411,7 @@ async fn token(
         .clients
         .resolve(&persistence_service, &request.client_id)
         .await?;
-    if !client.redirect_uris.contains(&code.redirect_uri) {
+    if !client.allows_redirect(&code.redirect_uri) {
         return Err(IdentityError::OAuth("invalid_grant"));
     }
     if client.cimd && headers.contains_key(header::AUTHORIZATION) {
@@ -750,7 +750,7 @@ fn validate_authorization_request(
             "Only response_type=code is supported".to_string(),
         ));
     }
-    if !client.redirect_uris.contains(&request.redirect_uri) {
+    if !client.allows_redirect(&request.redirect_uri) {
         return Err(IdentityError::BadRequest(
             "redirect_uri is not registered for this client".to_string(),
         ));
@@ -820,7 +820,7 @@ fn validate_pending_client(
     pending: &PendingAuthorizationRequest,
     client: &Client,
 ) -> Result<(), IdentityError> {
-    if !client.redirect_uris.contains(&pending.redirect_uri) {
+    if !client.allows_redirect(&pending.redirect_uri) {
         return Err(IdentityError::OAuth("invalid_request"));
     }
     Ok(())
@@ -1058,6 +1058,7 @@ mod tests {
             name: "Example client".to_string(),
             redirect_uris: vec!["http://localhost:4000/callback".to_string()],
             cimd: false,
+            application_type: crate::client_metadata::ApplicationType::Web,
         }
     }
 
@@ -2092,6 +2093,38 @@ mod tests {
     }
     #[tokio::test]
     async fn cimd_flow_binds_jwt_consent_and_refresh_to_resource() -> anyhow::Result<()> {
+        for (application_type, registered, requested) in [
+            (
+                "web",
+                "https://client.example/callback",
+                "https://client.example/callback",
+            ),
+            (
+                "native",
+                "http://127.0.0.1/callback",
+                "http://127.0.0.1:52889/callback",
+            ),
+            (
+                "native",
+                "http://[::1]/callback",
+                "http://[::1]:52889/callback",
+            ),
+            (
+                "native",
+                "http://localhost/callback",
+                "http://localhost:52889/callback",
+            ),
+        ] {
+            cimd_flow_with_redirect(application_type, registered, requested).await?;
+        }
+        Ok(())
+    }
+
+    async fn cimd_flow_with_redirect(
+        application_type: &str,
+        registered: &str,
+        requested: &str,
+    ) -> anyhow::Result<()> {
         let db = mem_db().await?;
         let persistence = Arc::new(PersistenceService::new(db.clone()));
         let user_id = persistence.persist_identity(admin_identity()).await?;
@@ -2105,7 +2138,8 @@ mod tests {
                 client_id,
                 &serde_json::to_vec(&json!({
                     "client_id": client_id, "client_name": "MCP client",
-                    "redirect_uris": ["https://client.example/callback"],
+                    "redirect_uris": [registered],
+                    "application_type": application_type,
                     "token_endpoint_auth_method": "none",
                     "grant_types": ["authorization_code", "refresh_token"]
                 }))?,
@@ -2163,7 +2197,7 @@ mod tests {
             url.query_pairs_mut().extend_pairs([
                 ("client_id", client_id),
                 ("response_type", "code"),
-                ("redirect_uri", "https://client.example/callback"),
+                ("redirect_uri", requested),
                 ("resource", resource),
                 ("scope", "email groups offline_access"),
                 ("state", "state-123"),
@@ -2184,7 +2218,17 @@ mod tests {
         assert_eq!(consent_page.status(), StatusCode::OK);
         let html = String::from_utf8(response_body(consent_page).await)?;
         assert!(html.contains(resource));
-        assert!(html.contains("https://client.example/callback"));
+        assert!(html.contains(requested));
+        let resumed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/authorize/resume")
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(resumed.status(), StatusCode::OK);
         let approved = app
             .clone()
             .oneshot(
@@ -2226,7 +2270,7 @@ mod tests {
                     ("grant_type", "authorization_code"),
                     ("client_id", client_id),
                     ("code", code),
-                    ("redirect_uri", "https://client.example/callback"),
+                    ("redirect_uri", requested),
                     ("resource", audience),
                     ("code_verifier", proof),
                 ])?)
@@ -2237,13 +2281,29 @@ mod tests {
                 assert_eq!(body["error"], expected);
             }
         }
+        // Metadata permits a native client to choose its port at authorization,
+        // but exchanging this code must use the exact chosen redirect URI.
+        let mut wrong_redirect = Url::parse(requested)?;
+        wrong_redirect.set_port(Some(52890)).unwrap();
+        let rejected = app
+            .clone()
+            .oneshot(form(&[
+                ("grant_type", "authorization_code"),
+                ("client_id", client_id),
+                ("code", code),
+                ("redirect_uri", wrong_redirect.as_str()),
+                ("resource", resource),
+                ("code_verifier", &verifier),
+            ])?)
+            .await?;
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
         let exchanged = app
             .clone()
             .oneshot(form(&[
                 ("grant_type", "authorization_code"),
                 ("client_id", client_id),
                 ("code", code),
-                ("redirect_uri", "https://client.example/callback"),
+                ("redirect_uri", requested),
                 ("resource", resource),
                 ("code_verifier", &verifier),
             ])?)
