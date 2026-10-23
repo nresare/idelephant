@@ -4,6 +4,11 @@ origin = "https://id.noa.re"
 tls_cert_path = "/tls/tls.crt"
 tls_key_path = "/tls/tls.key"
 
+[traces]
+endpoint = "http://tempo.tempo.svc:4317"
+service-name = "idelephant"
+excluded-paths = ["/healthz"]
+
 [email]
 sender_email = "noa@resare.com"
 relay_host = "mail.resare.com"

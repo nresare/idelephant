@@ -16,6 +16,63 @@ pub struct Config {
     #[serde(rename = "email")]
     pub email_config: EmailConfig,
     pub persistence: PersistenceConfig,
+    pub traces: Option<TracesConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(try_from = "RawTracesConfig")]
+pub struct TracesConfig {
+    pub endpoint: String,
+    pub service_name: String,
+    pub excluded_paths: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawTracesConfig {
+    endpoint: String,
+    #[serde(default = "default_service_name")]
+    service_name: String,
+    #[serde(default)]
+    excluded_paths: Vec<String>,
+}
+
+fn default_service_name() -> String {
+    "idelephant".to_string()
+}
+
+impl TryFrom<RawTracesConfig> for TracesConfig {
+    type Error = String;
+
+    fn try_from(raw: RawTracesConfig) -> Result<Self, Self::Error> {
+        let endpoint = url::Url::parse(&raw.endpoint)
+            .map_err(|_| "Invalid traces.endpoint; expected an absolute HTTP(S) gRPC endpoint")?;
+        if !matches!(endpoint.scheme(), "http" | "https")
+            || endpoint.host_str().is_none()
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || !matches!(endpoint.path(), "" | "/")
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return Err("Invalid traces.endpoint; use an HTTP(S) gRPC endpoint such as http://tempo:4317 without /v1/traces, credentials, query or fragment".into());
+        }
+        if raw.service_name.trim().is_empty() {
+            return Err("Invalid traces.service-name; expected a non-empty string".into());
+        }
+        if raw
+            .excluded_paths
+            .iter()
+            .any(|path| !path.starts_with('/') || path.contains('?') || path.contains('#'))
+        {
+            return Err("Invalid traces.excluded-paths; expected absolute URL paths without query or fragment".into());
+        }
+        Ok(Self {
+            endpoint: raw.endpoint,
+            service_name: raw.service_name,
+            excluded_paths: raw.excluded_paths,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -146,5 +203,55 @@ uri = "ws://localhost:8000"
             assert!(parse(&format!("session_timeout = {value:?}")).is_err());
         }
         assert!(parse("session_timeout = 3600").is_err());
+    }
+
+    fn parse_traces(settings: &str) -> Result<Config, toml::de::Error> {
+        let config = format!(
+            "origin = 'http://localhost:8080'\nroot_key = 'test'\n\
+             [email]\nrelay_host = 'localhost'\nsender_email = 'test@example.com'\n\
+             [persistence]\nuri = 'ws://localhost:8000'\n{settings}"
+        );
+        toml::from_str(&config)
+    }
+
+    #[test]
+    fn traces_are_optional_with_service_and_exclusion_defaults() {
+        assert!(parse_traces("").unwrap().traces.is_none());
+        let traces = parse_traces("[traces]\nendpoint = 'http://tempo:4317'")
+            .unwrap()
+            .traces
+            .unwrap();
+        assert_eq!(traces.service_name, "idelephant");
+        assert!(traces.excluded_paths.is_empty());
+        let traces = parse_traces("[traces]\nendpoint = 'https://tempo:4317'\nservice-name = 'identity'\nexcluded-paths = ['/healthz']")
+            .unwrap().traces.unwrap();
+        assert_eq!(traces.service_name, "identity");
+        assert_eq!(traces.excluded_paths, ["/healthz"]);
+    }
+
+    #[test]
+    fn traces_reject_invalid_configuration() {
+        for settings in [
+            "",
+            "endpoint = ''",
+            "endpoint = 'tempo:4317'",
+            "endpoint = 'ftp://tempo:4317'",
+            "endpoint = 'http://tempo:4317/v1/traces'",
+            "endpoint = 'http://user:secret@tempo:4317'",
+            "endpoint = 'http://tempo:4317?secret=yes'",
+            "endpoint = 'http://tempo:4317#fragment'",
+            "endpoint = 'http://tempo:4317'\nservice-name = '  '",
+            "endpoint = 'http://tempo:4317'\nservice_name = 'typo'",
+            "endpoint = 'http://tempo:4317'\nexcluded-paths = ['healthz']",
+            "endpoint = 'http://tempo:4317'\nexcluded-paths = ['/healthz?query']",
+            "endpoint = 'http://tempo:4317'\nexcluded-paths = ['/healthz#fragment']",
+            "endpoint = 'http://tempo:4317'\nexcluded-paths = '/healthz'",
+            "endpoint = 'http://tempo:4317'\nexcluded-paths = [42]",
+        ] {
+            assert!(
+                parse_traces(&format!("[traces]\n{settings}")).is_err(),
+                "{settings}"
+            );
+        }
     }
 }
