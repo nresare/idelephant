@@ -1,6 +1,6 @@
 use crate::auth::IDENTITY;
 use crate::client_metadata::Client;
-use crate::error::IdentityError;
+use crate::error::{BrowserErrorDetail, IdentityError};
 use crate::oidc::{JwksResponse, OidcService, OpenidConfiguration};
 use crate::persistence::{
     AuthorizationCode, CreateAuthorizationCode, Identity, OAuthClient, PersistenceService,
@@ -23,10 +23,13 @@ use tower_sessions::Session;
 use url::Url;
 
 pub fn oauth_routes() -> Router<AppState> {
-    Router::new()
+    let browser_routes = Router::new()
         .route("/authorize", get(authorize))
         .route("/authorize/resume", get(resume_authorize))
         .route("/authorize/consent", post(authorize_consent))
+        .layer(axum::middleware::map_response(authorization_error_page));
+    Router::new()
+        .merge(browser_routes)
         .route("/token", post(token))
         .route(
             "/oauth-client",
@@ -45,6 +48,40 @@ pub fn oauth_routes() -> Router<AppState> {
             "/.well-known/oauth-authorization-server",
             get(openid_configuration),
         )
+}
+
+async fn authorization_error_page(response: Response) -> Response {
+    let status = response.status();
+    if !status.is_client_error() && !status.is_server_error() {
+        return response;
+    }
+    let detail = response.extensions().get::<BrowserErrorDetail>().cloned()
+        .unwrap_or_else(|| BrowserErrorDetail {
+            message: if status.is_client_error() {
+                "The authorization request could not be read. Check that the required parameters are present and correctly formatted."
+            } else {
+                "An internal error prevented authorization. Please contact the identity provider's administrator."
+            }.into(),
+            code: None,
+        });
+    // Handlebars escapes all error details, including values from bad requests.
+    let html = handlebars::Handlebars::new().render_template(
+        include_str!("../web_templates/authorization-error.html.tmpl"),
+        &json!({"detail": detail.message, "code": detail.code}),
+    ).unwrap_or_else(|error| {
+        tracing::error!(%error, "Could not render authorization error page");
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Authorization failed</title><h1>Authorization failed</h1><p>A bug or configuration error may have prevented sign-in. Please contact the identity provider's administrator.</p></html>".into()
+    });
+    (
+        status,
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::PRAGMA, "no-cache"),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ],
+        Html(html),
+    )
+        .into_response()
 }
 
 pub const PENDING_AUTHORIZATION: &str = "idelephant.oauth.pending-authorization";
@@ -1369,7 +1406,7 @@ mod tests {
             let error = super::refresh_tokens(&ps, &oidc, refresh_request(token, client, scope))
                 .await
                 .unwrap_err();
-            assert!(matches!(error, IdentityError::OAuth(code) if code == expected));
+            assert_eq!(error.oauth_error_code(), Some(expected));
         }
         let response = super::refresh_tokens(
             &ps,
@@ -2412,6 +2449,184 @@ mod tests {
             )
             .await?;
         assert_eq!(userinfo.status(), StatusCode::BAD_REQUEST);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn browser_authorization_failures_show_safe_html_details() -> anyhow::Result<()> {
+        let db = mem_db().await?;
+        let persistence = Arc::new(PersistenceService::new(db.clone()));
+        persistence
+            .create_oauth_client(
+                "client-1",
+                "Example",
+                vec!["https://client.example/callback".into()],
+            )
+            .await?;
+        let issuer = "https://identity.example";
+        let app = test_app(
+            AppState {
+                ps: persistence.clone(),
+                is: Arc::new(InviteService::new(
+                    persistence.clone(),
+                    &EmailConfig {
+                        relay_host: "localhost".into(),
+                        username: None,
+                        password_file: None,
+                        sender_email: "test@example.com".into(),
+                    },
+                    issuer,
+                )?),
+                templates: Arc::new(Templates::new()?),
+                oidc: Arc::new(OidcService::new(issuer, persistence.as_ref().clone())),
+                rs: Arc::new(RegistrationService::new(issuer)?),
+                bypass_authentication: false,
+            },
+            db,
+        );
+        let authorization = |client: &str, redirect: &str, scope: &str| {
+            let mut url = Url::parse(&format!("{issuer}/authorize")).unwrap();
+            url.query_pairs_mut().extend_pairs([
+                ("response_type", "code"),
+                ("client_id", client),
+                ("redirect_uri", redirect),
+                ("scope", scope),
+                ("code_challenge", "challenge"),
+                ("code_challenge_method", "S256"),
+                ("state", "never-display-oauth-state"),
+            ]);
+            format!("{}?{}", url.path(), url.query().unwrap())
+        };
+        for (method, uri, body, status, detail) in [
+            (
+                "GET",
+                "/authorize".into(),
+                "",
+                StatusCode::BAD_REQUEST,
+                "required parameters",
+            ),
+            (
+                "GET",
+                "/authorize/resume".into(),
+                "",
+                StatusCode::BAD_REQUEST,
+                "No pending authorization request",
+            ),
+            (
+                "POST",
+                "/authorize/consent".into(),
+                "",
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "required parameters",
+            ),
+            (
+                "POST",
+                "/authorize/consent".into(),
+                "decision=approve",
+                StatusCode::BAD_REQUEST,
+                "No authenticated identity",
+            ),
+            (
+                "GET",
+                authorization(
+                    "https://127.0.0.1/client.json",
+                    "https://client.example/callback",
+                    "email",
+                ),
+                "",
+                StatusCode::BAD_REQUEST,
+                "private or reserved network address",
+            ),
+            (
+                "GET",
+                authorization("client-1", "https://other.example/callback", "email"),
+                "",
+                StatusCode::BAD_REQUEST,
+                "redirect_uri is not registered",
+            ),
+            (
+                "GET",
+                authorization(
+                    "client-1",
+                    "https://client.example/callback",
+                    "<script>alert(1)</script>",
+                ),
+                "",
+                StatusCode::BAD_REQUEST,
+                "&lt;script&gt;alert(1)&lt;/script&gt;",
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(&uri)
+                        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                        .body(Body::from(body))?,
+                )
+                .await?;
+            assert_eq!(response.status(), status, "{uri}");
+            assert!(response.headers()[header::CONTENT_TYPE]
+                .to_str()?
+                .starts_with("text/html"));
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
+            assert!(response.headers().get(header::LOCATION).is_none());
+            let html = String::from_utf8(response_body(response).await)?;
+            for expected in [
+                "Authorization failed",
+                "bug or a configuration error",
+                "Error detail",
+                detail,
+            ] {
+                assert!(html.contains(expected), "missing {expected}: {html}");
+            }
+            assert!(!html.contains("<script>"));
+            assert!(!html.contains("never-display-oauth-state"));
+        }
+        // API errors retain their OAuth JSON shape even when HTML is requested.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header(header::ACCEPT, "text/html")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("grant_type=unsupported"))?,
+            )
+            .await?;
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+        let error: Value = serde_json::from_slice(&response_body(response).await)?;
+        assert_eq!(error, json!({"error": "unsupported_grant_type"}));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn browser_errors_show_cimd_details_but_hide_internal_failures() -> anyhow::Result<()> {
+        use axum::response::IntoResponse;
+        let error = IdentityError::OAuthDetailed { code: "invalid_client", detail: "The application's client metadata does not list the required 'authorization_code' grant type.".into() };
+        // The same error remains generic at API endpoints.
+        let response = IdentityError::OAuthDetailed {
+            code: "invalid_client",
+            detail: "Safe browser detail".into(),
+        }
+        .into_response();
+        let body: Value = serde_json::from_slice(&response_body(response).await)?;
+        assert_eq!(body, json!({"error": "invalid_client"}));
+        let response = super::authorization_error_page(error.into_response()).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let html = String::from_utf8(response_body(response).await)?;
+        assert!(html.contains("authorization_code"));
+        assert!(html.contains("invalid_client"));
+        assert!(html.contains("client metadata does not list"));
+        let error = IdentityError::Anyhow(anyhow::anyhow!(
+            "database password=never-display-internal-secret"
+        ));
+        let response = super::authorization_error_page(error.into_response()).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let html = String::from_utf8(response_body(response).await)?;
+        assert!(html.contains("An internal error prevented authorization"));
+        assert!(!html.contains("never-display-internal-secret"));
         Ok(())
     }
 }

@@ -135,7 +135,35 @@ fn log_client_id(id: &str) -> String {
 
 fn invalid(id: &str, reason: &str) -> IdentityError {
     tracing::warn!(client_id = %log_client_id(id), reason, "CIMD client rejected");
-    IdentityError::OAuth("invalid_client")
+    let detail = match reason {
+        "invalid_metadata_url" | "missing_metadata_host" => "The application's client ID must be a valid HTTPS client metadata URL, including a path and without credentials, query parameters, or a fragment.",
+        "dns_lookup_timeout" => "Looking up the application's client metadata host timed out.",
+        "dns_lookup_failed" | "dns_lookup_returned_no_addresses" => "The application's client metadata host could not be found in DNS.",
+        "metadata_address_is_not_public" => "The application's client metadata URL resolves to a private or reserved network address. Client metadata must be hosted on a public HTTPS address.",
+        "metadata_http_client_configuration_failed" => "The identity provider could not prepare a secure connection to the application's client metadata endpoint.",
+        "metadata_request_timeout" => "Fetching the application's client metadata timed out.",
+        "metadata_connection_failed" => "The identity provider could not establish a secure connection to the application's client metadata endpoint.",
+        "metadata_request_failed" | "metadata_body_read_failed" => "The identity provider could not download the application's client metadata.",
+        "metadata_response_too_large" => "The application's client metadata document exceeds the maximum size of 64 KiB.",
+        "invalid_metadata_json_or_field_type" => "The application's client metadata is not valid JSON, is missing required fields, or contains unsupported field types or values.",
+        "metadata_client_id_mismatch" => "The client_id in the application's metadata document does not exactly match the URL used to fetch that document.",
+        "invalid_client_name" => "The application's client metadata must include a non-empty client_name of at most 256 bytes.",
+        "invalid_redirect_uri_count" => "The application's client metadata must include between 1 and 32 callback URLs in redirect_uris.",
+        "invalid_redirect_uri" => "The application's client metadata contains an invalid callback URL. Callbacks must use HTTPS or HTTP on a loopback host, without credentials, fragments, or wildcards.",
+        "public_client_authentication_not_supported" => "The application's client metadata does not support token authentication method 'none', which is required by this identity provider's CIMD implementation.",
+        "authorization_code_grant_not_supported" => "The application's client metadata does not list the required 'authorization_code' grant type.",
+        "unsupported_response_types" => "The application's client metadata declares unsupported response types. This identity provider requires response_types to contain only 'code'.",
+        _ => "The application's client metadata could not be validated.",
+    };
+    let detail = if let Some(status) = reason.strip_prefix("metadata_http_status_") {
+        format!("The application's client metadata endpoint returned HTTP {status} instead of a successful response. Metadata must be served directly without redirects.")
+    } else {
+        detail.to_string()
+    };
+    IdentityError::OAuthDetailed {
+        code: "invalid_client",
+        detail,
+    }
 }
 
 impl ClientMetadataService {
@@ -440,7 +468,10 @@ mod tests {
             });
             assert!(matches!(
                 parse_document(id, &serde_json::to_vec(&document).unwrap()),
-                Err(IdentityError::OAuth("invalid_client"))
+                Err(IdentityError::OAuthDetailed {
+                    code: "invalid_client",
+                    ..
+                })
             ));
             document["client_id"] = id.into();
             assert!(parse_document(id, &serde_json::to_vec(&document).unwrap()).is_ok());
@@ -482,7 +513,10 @@ mod tests {
             .await;
         assert!(matches!(
             result,
-            Err(IdentityError::OAuth("invalid_client"))
+            Err(IdentityError::OAuthDetailed {
+                code: "invalid_client",
+                ..
+            })
         ));
         let logs = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
         assert!(logs.contains("metadata_address_is_not_public"), "{logs}");

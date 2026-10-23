@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Authorization failed</title>
+<link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+<main>
+<section class="hero">
+<p class="eyebrow">Authorization failed</p>
+<h1>We couldn’t complete sign-in</h1>
+<p class="lede">The operation failed. This may be caused by a bug or a configuration error in the application or identity provider.</p>
+</section>
+<section class="panel" aria-labelledby="error-title">
+<h2 id="error-title">Error detail</h2>
+<p class="error-box authorization-error-detail">{{detail}}</p>
+{{#if code}}
+<p class="muted">Error code: <code>{{code}}</code></p>
+{{/if}}
+<p>Try starting authentication again from the application. If it keeps failing, share this error detail with the application’s or identity provider’s administrator.</p>
+</section>
+</main>
+</body>
+</html>
