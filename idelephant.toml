@@ -7,6 +7,12 @@ origin = "http://localhost:8080"
 # Login session inactivity timeout.
 session_timeout = "5d"
 
+# Optional request tracing via OTLP gRPC (omit this block to disable tracing).
+#[traces]
+#endpoint = "http://tempo.tempo.svc:4317"
+#service-name = "idelephant"
+#excluded-paths = ["/healthz"]
+
 [email]
 sender_email = "noa@resare.com"
 relay_host = "mail.resare.com"

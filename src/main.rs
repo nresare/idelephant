@@ -13,6 +13,7 @@ mod persistence;
 mod register;
 mod root_setup;
 mod shutdown;
+mod telemetry;
 mod tls;
 mod util;
 mod web;
@@ -124,7 +125,26 @@ fn listen_address(tls_enabled: bool, bypass_authentication: bool) -> SocketAddr 
 async fn run() -> Result<(), Fatal> {
     let cli = Cli::parse();
     let signals = shutdown::Signals::new().map_err(|e| Fatal::Other(e.into()))?;
+    let config = std::fs::read_to_string(&cli.config_path)
+        .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e.into()))?;
+    let config: Config = toml::from_str(&config)
+        .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e.into()))?;
+    let provider = match &config.traces {
+        Some(traces) => telemetry::provider(traces)
+            .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e))?,
+        None => opentelemetry_sdk::trace::SdkTracerProvider::builder().build(),
+    };
+    let result = run_server(cli, &config, &provider, signals).await;
+    telemetry::shutdown(provider).await;
+    result
+}
 
+async fn run_server(
+    cli: Cli,
+    config: &Config,
+    provider: &opentelemetry_sdk::trace::SdkTracerProvider,
+    signals: shutdown::Signals,
+) -> Result<(), Fatal> {
     let signal = signals.wait();
     tokio::pin!(signal);
     let PreparedServer {
@@ -132,7 +152,7 @@ async fn run() -> Result<(), Fatal> {
         addr,
         tls_config,
     } = tokio::select! {
-        result = prepare_server(cli) => result?,
+        result = prepare_server(cli, config, provider) => result?,
         () = &mut signal => {
             info!("shutdown complete during startup");
             return Ok(());
@@ -179,13 +199,12 @@ struct PreparedServer {
     tls_config: Option<axum_server::tls_rustls::RustlsConfig>,
 }
 
-async fn prepare_server(cli: Cli) -> Result<PreparedServer, Fatal> {
-    let config = std::fs::read_to_string(&cli.config_path)
-        .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e.into()))?;
-
-    let config: Config = toml::from_str(&config)
-        .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e.into()))?;
-    let tls_config = tls::load(&config, std::path::Path::new(&cli.config_path))
+async fn prepare_server(
+    cli: Cli,
+    config: &Config,
+    provider: &opentelemetry_sdk::trace::SdkTracerProvider,
+) -> Result<PreparedServer, Fatal> {
+    let tls_config = tls::load(config, std::path::Path::new(&cli.config_path))
         .await
         .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e))?;
     if cli.bypass_authentication && !is_loopback_url(&config.origin) {
@@ -201,7 +220,7 @@ async fn prepare_server(cli: Cli) -> Result<PreparedServer, Fatal> {
         .map_err(|e| Fatal::DbSetup(e.into()))?;
 
     let session_layer = make_session_layer(db.clone(), config.session_timeout);
-    let state = build_app_state(&config, db, cli.bypass_authentication).await?;
+    let state = build_app_state(config, db, cli.bypass_authentication).await?;
 
     let app = Router::new()
         .route("/", get(index_handler))
@@ -223,6 +242,11 @@ async fn prepare_server(cli: Cli) -> Result<PreparedServer, Fatal> {
                 .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
         )
         .with_state(state);
+
+    let app = match &config.traces {
+        Some(traces) => telemetry::instrument(app, provider, traces),
+        None => app,
+    };
 
     let addr = listen_address(tls_config.is_some(), cli.bypass_authentication);
     info!(

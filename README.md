@@ -51,6 +51,31 @@ The server logs the signal, stops accepting connections, and allows active reque
 up to 25 seconds to finish before exiting. Keep the deployment termination grace
 period longer than this deadline; the Kubernetes default is 30 seconds.
 
+## Request tracing
+
+To send request traces to Tempo or another OTLP gRPC collector, add:
+
+```toml
+[traces]
+endpoint = "http://tempo.tempo.svc:4317"
+service-name = "idelephant"
+excluded-paths = ["/healthz"]
+```
+
+`endpoint` is required and must be an HTTP(S) gRPC endpoint, normally on port
+4317, without `/v1/traces`. HTTPS uses trusted public certificate authorities.
+`service-name` defaults to `idelephant`; `excluded-paths` defaults to an empty
+list. Exclusions match the exact URL path regardless of HTTP method or query
+string; `/healthz` does not exclude `/healthz/child`. Omit `[traces]` to disable
+tracing. Restart the server after changing these settings.
+
+Each request span includes the method, matched route (when available) and response
+status. Concrete paths are recorded only for static routes, keeping invitation
+tokens private. Queries, headers, request bodies and error messages are omitted.
+Incoming W3C `traceparent` and `tracestate` context connects spans to upstream traces. Traces
+are exported in batches and flushed during graceful shutdown; an unavailable
+collector does not prevent serving requests.
+
 ## Login session duration
 
 Set the top-level `session_timeout` option to control how long a login
