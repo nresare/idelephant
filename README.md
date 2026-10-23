@@ -144,7 +144,11 @@ Include the same `resource` in the authorization request and authorization-code
 token exchange. It must be an absolute HTTPS URI without credentials, a query, or
 a fragment. CIMD requests require it; manually registered OIDC clients can omit it
 and receive tokens addressed to idElephant's `/userinfo` endpoint. Resource
-identifiers are compared exactly, including paths and trailing slashes. Consent
+identifiers are compared exactly, including paths and trailing slashes. Native CIMD
+clients (`application_type: "native"`) may choose any port for an HTTP loopback
+callback on `127.0.0.1`, `[::1]`, or `localhost`; the remaining URI must match
+exactly. Token exchange must repeat the complete callback URI used in the
+authorization request, including the selected port. Consent
 is remembered separately for each user, client, and resource.
 
 Request `email` to include the user's email, `groups` to include group names, and

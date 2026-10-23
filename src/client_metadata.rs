@@ -12,12 +12,21 @@ use url::Url;
 const MAX_DOCUMENT_BYTES: usize = 64 * 1024;
 const MAX_CACHE_ENTRIES: usize = 256;
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ApplicationType {
+    #[default]
+    Web,
+    Native,
+}
+
 #[derive(Clone, Debug)]
 pub struct Client {
     pub client_id: String,
     pub name: String,
     pub redirect_uris: Vec<String>,
     pub cimd: bool,
+    pub application_type: ApplicationType,
 }
 
 impl From<OAuthClient> for Client {
@@ -27,12 +36,74 @@ impl From<OAuthClient> for Client {
             name: client.name,
             redirect_uris: client.redirect_uris,
             cimd: false,
+            application_type: ApplicationType::Web,
         }
     }
 }
 
+impl Client {
+    pub fn allows_redirect(&self, requested: &str) -> bool {
+        self.redirect_uris.iter().any(|registered| {
+            if registered == requested {
+                return true;
+            }
+            if self.application_type != ApplicationType::Native {
+                return false;
+            }
+            match (
+                loopback_without_port(registered),
+                loopback_without_port(requested),
+            ) {
+                (Some(registered), Some(requested)) => registered == requested,
+                _ => false,
+            }
+        })
+    }
+}
+
+// RFC 8252 permits an ephemeral port on native HTTP loopback callbacks.
+// Remove only that port from the original text: URL normalization must not
+// loosen matching of hosts, paths, query strings, or their encodings.
+fn loopback_without_port(uri: &str) -> Option<String> {
+    if !valid_redirect(uri) {
+        return None;
+    }
+    let url = Url::parse(uri).ok()?;
+    let loopback = match url.host()? {
+        url::Host::Domain("localhost") => true,
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+        _ => false,
+    };
+    if !loopback {
+        return None;
+    }
+    let remainder = uri.strip_prefix("http://")?;
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    let host_end = if authority.starts_with('[') {
+        authority.find(']')? + 1
+    } else {
+        authority.find(':').unwrap_or(authority.len())
+    };
+    let port = &authority[host_end..];
+    if !port.is_empty() {
+        let number = port.strip_prefix(':')?;
+        if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+    }
+    Some(format!(
+        "http://{}{}",
+        &authority[..host_end],
+        &remainder[authority_end..]
+    ))
+}
+
 #[derive(Deserialize)]
 struct Document {
+    #[serde(default)]
+    application_type: ApplicationType,
     client_id: String,
     client_name: String,
     redirect_uris: Vec<String>,
@@ -227,6 +298,7 @@ fn parse_document(id: &str, bytes: &[u8]) -> Result<Client, IdentityError> {
         name: doc.client_name,
         redirect_uris: doc.redirect_uris,
         cimd: true,
+        application_type: doc.application_type,
     })
 }
 
@@ -262,6 +334,72 @@ fn public_ip(ip: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_loopback_redirects_allow_only_port_variation() {
+        let id = "https://chatgpt.com/oauth/codex/client.json";
+        let document = serde_json::json!({
+            "client_id": id, "client_name": "Codex", "application_type": "native",
+            "redirect_uris": ["http://127.0.0.1/callback", "http://[::1]:1234/callback", "http://localhost/callback"],
+            "token_endpoint_auth_method": "none"
+        });
+        let client = parse_document(id, &serde_json::to_vec(&document).unwrap()).unwrap();
+        for uri in [
+            "http://127.0.0.1:52889/callback",
+            "http://127.0.0.1:80/callback",
+            "http://[::1]:52889/callback",
+            "http://localhost:52889/callback",
+        ] {
+            assert!(client.allows_redirect(uri), "{uri}");
+        }
+        for uri in [
+            "http://127.0.0.2:52889/callback",
+            "http://127.1:52889/callback",
+            "http://127.0.0.1:52889/other",
+            "http://127.0.0.1:52889/%63allback",
+            "http://127.0.0.1:52889/a/../callback",
+            "http://127.0.0.1:52889/callback?extra=true",
+            "http://127.0.0.1:52889/callback#fragment",
+            "http://user@127.0.0.1:52889/callback",
+            "https://127.0.0.1:52889/callback",
+            "http://localhost.evil.example:52889/callback",
+            "http://[::ffff:127.0.0.1]:52889/callback",
+        ] {
+            assert!(!client.allows_redirect(uri), "{uri}");
+        }
+        let mut web_document = document.clone();
+        web_document
+            .as_object_mut()
+            .unwrap()
+            .remove("application_type");
+        let web = parse_document(id, &serde_json::to_vec(&web_document).unwrap()).unwrap();
+        assert!(web.allows_redirect("http://127.0.0.1/callback"));
+        assert!(!web.allows_redirect("http://127.0.0.1:52889/callback"));
+        web_document["application_type"] = "web".into();
+        let web = parse_document(id, &serde_json::to_vec(&web_document).unwrap()).unwrap();
+        assert!(!web.allows_redirect("http://127.0.0.1:52889/callback"));
+        web_document["application_type"] = "unknown".into();
+        assert!(parse_document(id, &serde_json::to_vec(&web_document).unwrap()).is_err());
+    }
+
+    #[test]
+    fn native_non_loopback_callbacks_still_require_exact_matching() {
+        let client = Client {
+            client_id: "native".into(),
+            name: "Native".into(),
+            cimd: true,
+            application_type: ApplicationType::Native,
+            redirect_uris: vec![
+                "https://client.example/callback".into(),
+                "http://127.0.0.1/callback?fixed=1".into(),
+            ],
+        };
+        assert!(client.allows_redirect("https://client.example/callback"));
+        assert!(!client.allows_redirect("https://client.example:52889/callback"));
+        assert!(!client.allows_redirect("http://client.example:52889/callback"));
+        assert!(client.allows_redirect("http://127.0.0.1:52889/callback?fixed=1"));
+        assert!(!client.allows_redirect("http://127.0.0.1:52889/callback?fixed=2"));
+    }
+
     #[test]
     fn document_identity_redirects_and_authentication_are_checked() {
         let id = "https://client.example/client.json";
