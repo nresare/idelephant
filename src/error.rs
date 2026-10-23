@@ -13,6 +13,8 @@ pub enum IdentityError {
     BadRequest(String),
     #[error("OAuth error: {0}")]
     OAuth(&'static str),
+    #[error("OAuth error: {code}: {detail}")]
+    OAuthDetailed { code: &'static str, detail: String },
     #[error("{0}")]
     Unauthorized(String),
     #[error("Failure related to interacting with the session: {0}")]
@@ -30,11 +32,47 @@ pub enum IdentityError {
     Token(#[from] DecodeError),
 }
 
+#[derive(Clone)]
+pub(crate) struct BrowserErrorDetail {
+    pub message: String,
+    pub code: Option<&'static str>,
+}
+
+impl IdentityError {
+    pub(crate) fn oauth_error_code(&self) -> Option<&'static str> {
+        match self {
+            Self::OAuth(code) | Self::OAuthDetailed { code, .. } => Some(code),
+            _ => None,
+        }
+    }
+
+    fn browser_detail(&self) -> BrowserErrorDetail {
+        let message = match self {
+            Self::OAuthDetailed { detail, .. } => detail.clone(),
+            Self::BadRequest(message) | Self::Unauthorized(message) => message.clone(),
+            Self::OAuth(code) => match *code {
+                "invalid_client" => "The application could not be identified or its client metadata could not be validated.",
+                "invalid_target" => "The requested resource is missing, invalid, or does not match the resource originally authorized.",
+                "invalid_request" => "The authorization request is invalid or no longer matches the application's current configuration.",
+                "invalid_scope" => "The application requested permissions that are not supported or have not been granted.",
+                "access_denied" => "Authorization was declined.",
+                _ => "The authorization request could not be completed.",
+            }.into(),
+            _ => "An internal error prevented authorization. The identity provider's administrator can find further details in the server logs.".into(),
+        };
+        BrowserErrorDetail {
+            message,
+            code: self.oauth_error_code(),
+        }
+    }
+}
+
 impl IntoResponse for IdentityError {
     fn into_response(self) -> axum::response::Response {
         error!("{:#}", self);
-        match self {
-            IdentityError::OAuth(code) => (
+        let detail = self.browser_detail();
+        let mut response = match self {
+            IdentityError::OAuth(code) | IdentityError::OAuthDetailed { code, .. } => (
                 StatusCode::BAD_REQUEST,
                 [("cache-control", "no-store"), ("pragma", "no-cache")],
                 axum::Json(serde_json::json!({"error": code})),
@@ -47,7 +85,9 @@ impl IntoResponse for IdentityError {
                 (StatusCode::UNAUTHORIZED, message).into_response()
             }
             other => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", other)).into_response(),
-        }
+        };
+        response.extensions_mut().insert(detail);
+        response
     }
 }
 

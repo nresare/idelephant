@@ -147,6 +147,13 @@ credentials are not logged by the CIMD resolver. At debug level, clients that
 advertise additional grant types are logged when accepted for authorization-code
 flow; unsupported token grant requests are still rejected.
 
+Browser authorization failures show an HTML page explaining that the operation
+failed, with the error detail and guidance for reporting a possible bug or
+configuration issue. This includes invalid client metadata, malformed requests,
+and errors while resuming authorization or recording consent. OAuth API endpoints
+such as `/token` retain their protocol responses. Error pages are not cached, and
+internal server details remain in the server logs.
+
 Include the same `resource` in the authorization request and authorization-code
 token exchange. It must be an absolute HTTPS URI without credentials, a query, or
 a fragment. CIMD requests require it; manually registered OIDC clients can omit it
