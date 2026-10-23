@@ -2141,7 +2141,7 @@ mod tests {
                     "redirect_uris": [registered],
                     "application_type": application_type,
                     "token_endpoint_auth_method": "none",
-                    "grant_types": ["authorization_code", "refresh_token"]
+                    "grant_types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer"]
                 }))?,
             )
             .await?;
@@ -2256,6 +2256,16 @@ mod tests {
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(body))?)
         };
+        let unsupported = app
+            .clone()
+            .oneshot(form(&[
+                ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
+                ("client_id", client_id),
+            ])?)
+            .await?;
+        assert_eq!(unsupported.status(), StatusCode::BAD_REQUEST);
+        let error: Value = serde_json::from_slice(&response_body(unsupported).await)?;
+        assert_eq!(error["error"], "unsupported_grant_type");
         for (audience, proof, expected) in [
             (
                 "https://other.example/mcp",

@@ -118,7 +118,23 @@ pub struct ClientMetadataService {
     cache: Arc<Mutex<HashMap<String, (Instant, Client)>>>,
 }
 
-fn invalid() -> IdentityError {
+fn log_client_id(id: &str) -> String {
+    // Invalid URLs can contain credentials or query parameters. Never log those.
+    Url::parse(id)
+        .ok()
+        .filter(|url| {
+            id.len() <= 2048
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        })
+        .map(|url| url.to_string())
+        .unwrap_or_else(|| "<invalid client URL>".into())
+}
+
+fn invalid(id: &str, reason: &str) -> IdentityError {
+    tracing::warn!(client_id = %log_client_id(id), reason, "CIMD client rejected");
     IdentityError::OAuth("invalid_client")
 }
 
@@ -150,7 +166,9 @@ impl ClientMetadataService {
         }
         // Resolve once, reject every non-public address, and pin these addresses to
         // the HTTP request. Disable proxies and redirects to avoid bypasses.
-        let host = url.host_str().ok_or_else(invalid)?;
+        let host = url
+            .host_str()
+            .ok_or_else(|| invalid(id, "missing_metadata_host"))?;
         let addresses: Vec<SocketAddr> = tokio::time::timeout(
             Duration::from_secs(5),
             tokio::net::lookup_host((
@@ -159,11 +177,14 @@ impl ClientMetadataService {
             )),
         )
         .await
-        .map_err(|_| invalid())?
-        .map_err(|_| invalid())?
+        .map_err(|_| invalid(id, "dns_lookup_timeout"))?
+        .map_err(|_| invalid(id, "dns_lookup_failed"))?
         .collect();
-        if addresses.is_empty() || addresses.iter().any(|a| !public_ip(a.ip())) {
-            return Err(invalid());
+        if addresses.is_empty() {
+            return Err(invalid(id, "dns_lookup_returned_no_addresses"));
+        }
+        if addresses.iter().any(|a| !public_ip(a.ip())) {
+            return Err(invalid(id, "metadata_address_is_not_public"));
         }
         let http = reqwest::Client::builder()
             .https_only(true)
@@ -172,19 +193,35 @@ impl ClientMetadataService {
             .timeout(Duration::from_secs(10))
             .resolve_to_addrs(host, &addresses)
             .build()
-            .map_err(|_| invalid())?;
+            .map_err(|_| invalid(id, "metadata_http_client_configuration_failed"))?;
         let mut response = http
             .get(url.clone())
             .header("accept", "application/json")
             .send()
             .await
-            .map_err(|_| invalid())?;
-        if !response.status().is_success()
-            || response
-                .content_length()
-                .is_some_and(|n| n > MAX_DOCUMENT_BYTES as u64)
+            .map_err(|error| {
+                invalid(
+                    id,
+                    if error.is_timeout() {
+                        "metadata_request_timeout"
+                    } else if error.is_connect() {
+                        "metadata_connection_failed"
+                    } else {
+                        "metadata_request_failed"
+                    },
+                )
+            })?;
+        if !response.status().is_success() {
+            return Err(invalid(
+                id,
+                &format!("metadata_http_status_{}", response.status().as_u16()),
+            ));
+        }
+        if response
+            .content_length()
+            .is_some_and(|n| n > MAX_DOCUMENT_BYTES as u64)
         {
-            return Err(invalid());
+            return Err(invalid(id, "metadata_response_too_large"));
         }
         let cache_control = response
             .headers()
@@ -199,9 +236,13 @@ impl ClientMetadataService {
             .and_then(|n| n.parse::<u64>().ok())
             .unwrap_or(0);
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| invalid())? {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| invalid(id, "metadata_body_read_failed"))?
+        {
             if bytes.len() + chunk.len() > MAX_DOCUMENT_BYTES {
-                return Err(invalid());
+                return Err(invalid(id, "metadata_response_too_large"));
             }
             bytes.extend_from_slice(&chunk);
         }
@@ -239,7 +280,7 @@ fn cache_ttl(header: &str) -> Duration {
 }
 
 fn metadata_url(id: &str) -> Result<Url, IdentityError> {
-    let url = Url::parse(id).map_err(|_| invalid())?;
+    let url = Url::parse(id).map_err(|_| invalid(id, "invalid_metadata_url"))?;
     if url.scheme() != "https"
         || url.host_str().is_none()
         || url.path() == "/"
@@ -248,7 +289,7 @@ fn metadata_url(id: &str) -> Result<Url, IdentityError> {
         || !url.username().is_empty()
         || url.password().is_some()
     {
-        return Err(invalid());
+        return Err(invalid(id, "invalid_metadata_url"));
     }
     Ok(url)
 }
@@ -272,26 +313,46 @@ pub fn valid_redirect(uri: &str) -> bool {
 }
 
 fn parse_document(id: &str, bytes: &[u8]) -> Result<Client, IdentityError> {
-    let doc: Document = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let doc: Document = serde_json::from_slice(bytes)
+        .map_err(|_| invalid(id, "invalid_metadata_json_or_field_type"))?;
+    if doc.client_id != id {
+        return Err(invalid(id, "metadata_client_id_mismatch"));
+    }
+    if doc.client_name.trim().is_empty() || doc.client_name.len() > 256 {
+        return Err(invalid(id, "invalid_client_name"));
+    }
+    if doc.redirect_uris.is_empty() || doc.redirect_uris.len() > 32 {
+        return Err(invalid(id, "invalid_redirect_uri_count"));
+    }
+    if doc.redirect_uris.iter().any(|uri| !valid_redirect(uri)) {
+        return Err(invalid(id, "invalid_redirect_uri"));
+    }
     let supports_none = match doc.token_endpoint_auth_methods_supported {
         Some(methods) => methods.iter().any(|m| m == "none"),
         None => doc.token_endpoint_auth_method.as_deref().unwrap_or("none") == "none",
     };
-    if doc.client_id != id
-        || doc.client_name.trim().is_empty()
-        || doc.client_name.len() > 256
-        || doc.redirect_uris.is_empty()
-        || doc.redirect_uris.len() > 32
-        || doc.redirect_uris.iter().any(|u| !valid_redirect(u))
-        || !supports_none
-        || doc.grant_types.is_some_and(|g| {
-            !g.iter().any(|s| s == "authorization_code")
-                || g.iter()
-                    .any(|s| s != "authorization_code" && s != "refresh_token")
-        })
-        || doc.response_types.is_some_and(|r| r != ["code"])
-    {
-        return Err(invalid());
+    if !supports_none {
+        return Err(invalid(id, "public_client_authentication_not_supported"));
+    }
+    // CIMD describes capabilities shared across authorization servers.
+    // Require the grant used here, rather than rejecting extra capabilities.
+    if let Some(grants) = doc.grant_types {
+        if !grants.iter().any(|grant| grant == "authorization_code") {
+            return Err(invalid(id, "authorization_code_grant_not_supported"));
+        }
+        let additional_grant_count = grants
+            .iter()
+            .filter(|grant| {
+                grant.as_str() != "authorization_code" && grant.as_str() != "refresh_token"
+            })
+            .count();
+        if additional_grant_count > 0 {
+            tracing::debug!(client_id = %log_client_id(id), additional_grant_count,
+                "CIMD client advertises additional grants; accepting authorization-code flow");
+        }
+    }
+    if doc.response_types.is_some_and(|types| types != ["code"]) {
+        return Err(invalid(id, "unsupported_response_types"));
     }
     Ok(Client {
         client_id: doc.client_id,
@@ -334,6 +395,100 @@ fn public_ip(ip: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[derive(Clone, Default)]
+    struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn test_logs() -> LogBuffer {
+        // Keep one subscriber alive for concurrent tests, so tracing's global
+        // callsite/level cache cannot disable events between scoped collectors.
+        static LOGS: std::sync::OnceLock<LogBuffer> = std::sync::OnceLock::new();
+        LOGS.get_or_init(|| {
+            let buffer = LogBuffer::default();
+            let writer = buffer.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .without_time()
+                .with_ansi(false)
+                .with_env_filter("idelephant::client_metadata=debug")
+                .with_writer(move || writer.clone())
+                .finish();
+            tracing::subscriber::set_global_default(subscriber).unwrap();
+            buffer
+        })
+        .clone()
+    }
+
+    #[test]
+    fn logs_explain_metadata_validation_without_exposing_sensitive_values() {
+        let buffer = test_logs();
+        {
+            let id = "https://claude.ai/oauth/mcp-oauth-client-metadata";
+            let mut document = serde_json::json!({
+                "client_id": "https://wrong.example/never-log-document-secret",
+                "client_name": "Claude", "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer"]
+            });
+            assert!(matches!(
+                parse_document(id, &serde_json::to_vec(&document).unwrap()),
+                Err(IdentityError::OAuth("invalid_client"))
+            ));
+            document["client_id"] = id.into();
+            assert!(parse_document(id, &serde_json::to_vec(&document).unwrap()).is_ok());
+            document["grant_types"] = serde_json::json!(["refresh_token"]);
+            assert!(parse_document(id, &serde_json::to_vec(&document).unwrap()).is_err());
+            document["grant_types"] = serde_json::json!(["authorization_code"]);
+            document["token_endpoint_auth_method"] = "private_key_jwt".into();
+            assert!(parse_document(id, &serde_json::to_vec(&document).unwrap()).is_err());
+            assert!(parse_document(id, b"never-log-invalid-json-secret").is_err());
+            assert!(metadata_url(
+                "https://user:never-log-password@client.example/client.json?state=never-log-state"
+            )
+            .is_err());
+        }
+        let logs = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+        for expected in [
+            "https://claude.ai/oauth/mcp-oauth-client-metadata",
+            "metadata_client_id_mismatch",
+            "additional_grant_count=1",
+            "authorization_code_grant_not_supported",
+            "public_client_authentication_not_supported",
+            "invalid_metadata_json_or_field_type",
+            "invalid_metadata_url",
+        ] {
+            assert!(logs.contains(expected), "missing {expected}: {logs}");
+        }
+        assert!(
+            !logs.contains("never-log-"),
+            "sensitive input leaked: {logs}"
+        );
+    }
+
+    #[tokio::test]
+    async fn logs_distinguish_blocked_metadata_fetches() {
+        let persistence = PersistenceService::new(crate::persistence::mem_db().await.unwrap());
+        let buffer = test_logs();
+        let result = ClientMetadataService::default()
+            .resolve(&persistence, "https://127.0.0.1/client.json")
+            .await;
+        assert!(matches!(
+            result,
+            Err(IdentityError::OAuth("invalid_client"))
+        ));
+        let logs = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+        assert!(logs.contains("metadata_address_is_not_public"), "{logs}");
+        assert!(logs.contains("https://127.0.0.1/client.json"), "{logs}");
+    }
+
     #[test]
     fn native_loopback_redirects_allow_only_port_variation() {
         let id = "https://chatgpt.com/oauth/codex/client.json";
@@ -398,6 +553,27 @@ mod tests {
         assert!(!client.allows_redirect("http://client.example:52889/callback"));
         assert!(client.allows_redirect("http://127.0.0.1:52889/callback?fixed=1"));
         assert!(!client.allows_redirect("http://127.0.0.1:52889/callback?fixed=2"));
+    }
+
+    #[test]
+    fn claude_metadata_can_advertise_additional_grants() {
+        let id = "https://claude.ai/oauth/mcp-oauth-client-metadata";
+        let mut document = serde_json::json!({
+            "client_id": id,
+            "client_name": "Claude",
+            "client_uri": "https://claude.ai",
+            "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+            "grant_types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none"
+        });
+        let client = parse_document(id, &serde_json::to_vec(&document).unwrap()).unwrap();
+        assert!(client.allows_redirect("https://claude.ai/api/mcp/auth_callback"));
+        // Extra capabilities are fine; the required authorization-code grant
+        // still must be present when the document declares grant types.
+        document["grant_types"] =
+            serde_json::json!(["urn:ietf:params:oauth:grant-type:jwt-bearer"]);
+        assert!(parse_document(id, &serde_json::to_vec(&document).unwrap()).is_err());
     }
 
     #[test]
