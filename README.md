@@ -140,6 +140,13 @@ are not supported. Metadata must be served directly, without redirects, from a
 public HTTPS address. Fetches have time and size limits; cached documents expire
 within five minutes, or earlier according to `Cache-Control`.
 
+CIMD rejections are logged at warning level with a `client_id` and a specific
+`reason`, distinguishing fetch failures from invalid metadata. URLs containing
+credentials, queries, or fragments are redacted. Metadata bodies and OAuth
+credentials are not logged by the CIMD resolver. At debug level, clients that
+advertise additional grant types are logged when accepted for authorization-code
+flow; unsupported token grant requests are still rejected.
+
 Include the same `resource` in the authorization request and authorization-code
 token exchange. It must be an absolute HTTPS URI without credentials, a query, or
 a fragment. CIMD requests require it; manually registered OIDC clients can omit it
