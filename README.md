@@ -116,14 +116,18 @@ Set the top-level `session_timeout` option to control how long a login
 session lasts without activity:
 
 ```toml
-session_timeout = "1d" # 24 hours
+session_timeout = "5d" # inactivity timeout
+max_login_time = "30d" # absolute time since login
 ```
 
-The default is `"1h"` (one hour). Use a positive duration such as `"30s"`,
+The defaults are `"1h"` (one hour) for `session_timeout` and `"30d"`
+(30 days) for `max_login_time`. Both accept a positive duration such as `"30s"`,
 `"15 minutes"`, `"12h"`, `"7d"`, or `"1h 30m"`, up to `4294967295` seconds.
-Session activity renews the timeout. This controls the idElephant
-login session; OAuth access tokens and ID tokens retain their own lifetimes.
-Restart the server after changing this setting.
+Session activity renews the inactivity timeout. The absolute limit starts at
+successful login and requires a fresh login once reached, even with continuous
+activity. Both limits apply, so the earlier expiry wins. These settings control
+the idElephant login session; OAuth access tokens and ID tokens retain their own
+lifetimes. Restart the server after changing these settings.
 
 ## HTTPS and HTTP/2
 

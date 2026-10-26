@@ -236,6 +236,10 @@ async fn prepare_server(
         .merge(oauth_routes())
         .merge(groups::group_routes())
         .fallback_service(get(not_found))
+        .layer(axum::middleware::from_fn_with_state(
+            config.max_login_time,
+            auth::enforce_max_login_time,
+        ))
         .layer(session_layer)
         .layer(axum::middleware::from_fn(idp_server::http::request))
         .with_state(state);
@@ -313,6 +317,7 @@ fn make_session_layer(
     let session_store = SurrealSessionStore::new(db, "sessions".to_string());
     SessionManagerLayer::new(session_store)
         .with_expiry(Expiry::OnInactivity(timeout))
+        .with_always_save(true)
         .with_same_site(SameSite::Lax)
         .with_secure(false)
 }
@@ -371,7 +376,7 @@ async fn index_handler(
                 "User is not active".to_string(),
             ));
         }
-        session.insert(IDENTITY, &identity).await?;
+        auth::establish_login(&session, &identity).await?;
         let pending_authorization = session
             .get::<serde_json::Value>(PENDING_AUTHORIZATION)
             .await?
