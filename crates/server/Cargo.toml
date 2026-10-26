@@ -1,0 +1,39 @@
+[package]
+name = "idp-server"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Axum server utilities for identity services: TLS, request logging and graceful shutdown"
+repository = "https://github.com/nresare/idelephant"
+readme = "README.md"
+rust-version = "1.99"
+keywords = ["axum", "tls", "shutdown", "tracing"]
+categories = ["web-programming", "network-programming"]
+include = ["src/**", "tests/**", "Cargo.toml", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
+
+[features]
+default = []
+telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:serde", "dep:url"]
+
+[dependencies]
+anyhow = "1.0"
+axum = "0.8"
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1.51", features = ["rt", "signal", "time"] }
+tracing = "0.1"
+
+opentelemetry = { version = "0.33", default-features = false, features = ["trace"], optional = true }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace"], optional = true }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "grpc-tonic", "tls-ring", "tls-webpki-roots"], optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+url = { version = "2.5", optional = true }
+
+[dev-dependencies]
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "testing"] }
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["trace", "gen-tonic"] }
+tonic = { version = "0.14", features = ["transport"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1.51", features = ["macros", "rt-multi-thread", "net", "sync"] }
+reqwest = { version = "0.13", features = ["rustls", "http2"] }

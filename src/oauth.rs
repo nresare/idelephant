@@ -14,11 +14,10 @@ use axum::http::{header, HeaderMap};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use tower_sessions::Session;
 use url::Url;
 
@@ -86,32 +85,7 @@ async fn authorization_error_page(response: Response) -> Response {
 
 pub const PENDING_AUTHORIZATION: &str = "idelephant.oauth.pending-authorization";
 
-#[derive(Debug, Deserialize)]
-struct AuthorizationRequest {
-    #[serde(default)]
-    resource: Option<String>,
-    response_type: String,
-    client_id: String,
-    redirect_uri: String,
-    #[serde(default)]
-    scope: String,
-    state: Option<String>,
-    nonce: Option<String>,
-    code_challenge: Option<String>,
-    code_challenge_method: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct PendingAuthorizationRequest {
-    #[serde(default)]
-    resource: Option<String>,
-    client_id: String,
-    redirect_uri: String,
-    scopes: Vec<String>,
-    state: Option<String>,
-    nonce: Option<String>,
-    code_challenge: String,
-}
+use idp_oauth::protocol::{verify_pkce, AuthorizationRequest, PendingAuthorizationRequest};
 
 #[derive(Debug, Deserialize)]
 struct ConsentRequest {
@@ -782,99 +756,24 @@ fn validate_authorization_request(
     request: AuthorizationRequest,
     client: &Client,
 ) -> Result<PendingAuthorizationRequest, IdentityError> {
-    if request.response_type != "code" {
-        return Err(IdentityError::BadRequest(
-            "Only response_type=code is supported".to_string(),
-        ));
-    }
-    if !client.allows_redirect(&request.redirect_uri) {
-        return Err(IdentityError::BadRequest(
-            "redirect_uri is not registered for this client".to_string(),
-        ));
-    }
-    if let Some(resource) = request.resource.as_deref() {
-        validate_resource(resource)?;
-    }
-    if client.cimd && request.resource.is_none() {
-        return Err(IdentityError::OAuth("invalid_target"));
-    }
-    let scope = if request.scope.is_empty() && request.resource.is_some() {
-        "email"
-    } else {
-        &request.scope
-    };
-    let scopes = parse_scopes(scope)?;
-    for scope in &scopes {
-        if !allowed_scopes().iter().any(|allowed| allowed == scope) {
-            return Err(IdentityError::BadRequest(format!(
-                "scope '{scope}' is not supported"
-            )));
-        }
-    }
-    let code_challenge = request
-        .code_challenge
-        .ok_or_else(|| IdentityError::BadRequest("code_challenge is required".to_string()))?;
-    let code_challenge_method = request.code_challenge_method.ok_or_else(|| {
-        IdentityError::BadRequest("code_challenge_method is required".to_string())
-    })?;
-    if code_challenge_method != "S256" {
-        return Err(IdentityError::BadRequest(
-            "Only PKCE code_challenge_method=S256 is supported".to_string(),
-        ));
-    }
-    if code_challenge.is_empty() {
-        return Err(IdentityError::BadRequest(
-            "code_challenge must not be empty".to_string(),
-        ));
-    }
-
-    Ok(PendingAuthorizationRequest {
-        client_id: client.client_id.clone(),
-        resource: request.resource,
-        redirect_uri: request.redirect_uri,
-        scopes,
-        state: request.state,
-        nonce: request.nonce,
-        code_challenge,
-    })
-}
-
-fn validate_resource(resource: &str) -> Result<(), IdentityError> {
-    let url = Url::parse(resource).map_err(|_| IdentityError::OAuth("invalid_target"))?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || url.fragment().is_some()
-        || url.query().is_some()
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return Err(IdentityError::OAuth("invalid_target"));
-    }
-    Ok(())
+    use idp_oauth::protocol::{AuthorizationPolicy, ResourceRequirement, ScopePolicy};
+    Ok(idp_oauth::protocol::validate_authorization_request(
+        request,
+        client,
+        AuthorizationPolicy {
+            scopes: ScopePolicy::Supported(&allowed_scopes()),
+            resource_requirement: ResourceRequirement::MetadataClients,
+        },
+    )?)
 }
 
 fn validate_pending_client(
     pending: &PendingAuthorizationRequest,
     client: &Client,
 ) -> Result<(), IdentityError> {
-    if !client.allows_redirect(&pending.redirect_uri) {
-        return Err(IdentityError::OAuth("invalid_request"));
-    }
-    Ok(())
-}
-
-fn parse_scopes(scope: &str) -> Result<Vec<String>, IdentityError> {
-    let scopes: Vec<String> = scope
-        .split(' ')
-        .filter(|scope| !scope.is_empty())
-        .map(ToString::to_string)
-        .collect();
-    if scopes.is_empty() {
-        return Err(IdentityError::BadRequest(
-            "scope must not be empty".to_string(),
-        ));
-    }
-    Ok(scopes)
+    Ok(idp_oauth::protocol::validate_pending_client(
+        pending, client,
+    )?)
 }
 
 fn validate_token_request(
@@ -937,11 +836,6 @@ fn allowed_scopes() -> [&'static str; 5] {
     ["openid", "profile", "email", "groups", "offline_access"]
 }
 
-fn verify_pkce(code_verifier: &str, expected_challenge: &str) -> bool {
-    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
-    challenge == expected_challenge
-}
-
 fn consent_satisfies_request(
     consent: Option<&crate::persistence::ConsentGrant>,
     requested_scopes: &[String],
@@ -954,21 +848,8 @@ fn consent_satisfies_request(
         .all(|scope| consent.scopes.iter().any(|granted| granted == scope))
 }
 
-fn build_redirect(
-    redirect_uri: &str,
-    params: &[(&str, Option<&str>)],
-) -> Result<String, IdentityError> {
-    let mut redirect = Url::parse(redirect_uri)
-        .map_err(|e| IdentityError::BadRequest(format!("Invalid redirect URI: {e}")))?;
-    {
-        let mut pairs = redirect.query_pairs_mut();
-        for (key, value) in params {
-            if let Some(value) = value {
-                pairs.append_pair(key, value);
-            }
-        }
-    }
-    Ok(redirect.to_string())
+fn build_redirect(uri: &str, params: &[(&str, Option<&str>)]) -> Result<String, IdentityError> {
+    Ok(idp_oauth::protocol::build_redirect(uri, params)?)
 }
 
 // Client secrets are deliberately ignored: all registered clients still require PKCE.
@@ -1109,7 +990,7 @@ mod tests {
             scope: "openid email".to_string(),
             state: Some("state-123".to_string()),
             nonce: Some("nonce-123".to_string()),
-            code_challenge: Some("challenge".to_string()),
+            code_challenge: Some("A".repeat(43)),
             code_challenge_method: Some("S256".to_string()),
         };
 
@@ -1133,7 +1014,7 @@ mod tests {
             scope: "openid".to_string(),
             state: None,
             nonce: None,
-            code_challenge: Some("challenge".to_string()),
+            code_challenge: Some("A".repeat(43)),
             code_challenge_method: Some("S256".to_string()),
         };
 
@@ -1151,7 +1032,7 @@ mod tests {
             scope: "email".to_string(),
             state: None,
             nonce: None,
-            code_challenge: Some("challenge".to_string()),
+            code_challenge: Some("A".repeat(43)),
             code_challenge_method: Some("S256".to_string()),
         };
 

@@ -16,63 +16,16 @@ pub struct Config {
     #[serde(rename = "email")]
     pub email_config: EmailConfig,
     pub persistence: PersistenceConfig,
+    #[serde(default, deserialize_with = "deserialize_traces")]
     pub traces: Option<TracesConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(try_from = "RawTracesConfig")]
-pub struct TracesConfig {
-    pub endpoint: String,
-    pub service_name: String,
-    pub excluded_paths: Vec<String>,
-}
+pub use idp_server::telemetry::TracesConfig;
 
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct RawTracesConfig {
-    endpoint: String,
-    #[serde(default = "default_service_name")]
-    service_name: String,
-    #[serde(default)]
-    excluded_paths: Vec<String>,
-}
-
-fn default_service_name() -> String {
-    "idelephant".to_string()
-}
-
-impl TryFrom<RawTracesConfig> for TracesConfig {
-    type Error = String;
-
-    fn try_from(raw: RawTracesConfig) -> Result<Self, Self::Error> {
-        let endpoint = url::Url::parse(&raw.endpoint)
-            .map_err(|_| "Invalid traces.endpoint; expected an absolute HTTP(S) gRPC endpoint")?;
-        if !matches!(endpoint.scheme(), "http" | "https")
-            || endpoint.host_str().is_none()
-            || !endpoint.username().is_empty()
-            || endpoint.password().is_some()
-            || !matches!(endpoint.path(), "" | "/")
-            || endpoint.query().is_some()
-            || endpoint.fragment().is_some()
-        {
-            return Err("Invalid traces.endpoint; use an HTTP(S) gRPC endpoint such as http://tempo:4317 without /v1/traces, credentials, query or fragment".into());
-        }
-        if raw.service_name.trim().is_empty() {
-            return Err("Invalid traces.service-name; expected a non-empty string".into());
-        }
-        if raw
-            .excluded_paths
-            .iter()
-            .any(|path| !path.starts_with('/') || path.contains('?') || path.contains('#'))
-        {
-            return Err("Invalid traces.excluded-paths; expected absolute URL paths without query or fragment".into());
-        }
-        Ok(Self {
-            endpoint: raw.endpoint,
-            service_name: raw.service_name,
-            excluded_paths: raw.excluded_paths,
-        })
-    }
+fn deserialize_traces<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<TracesConfig>, D::Error> {
+    TracesConfig::deserialize_optional(deserializer, "idelephant")
 }
 
 #[derive(Deserialize)]

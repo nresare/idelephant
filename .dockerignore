@@ -4,3 +4,7 @@ target/
 .deploy/
 idelephant.toml
 README.md
+local-dev/
+**/target/
+**/local-dev/
+idfrog/idfrog.toml

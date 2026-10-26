@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: idfrog
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: idfrog-client-selfsigned
+  namespace: idfrog
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: idfrog-entra-client
+  namespace: idfrog
+spec:
+  secretName: idfrog-entra-client
+  commonName: idfrog-entra-client
+  duration: 8760h # One year
+  renewBefore: 720h # Thirty days
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    encoding: PKCS8
+    rotationPolicy: Always
+  usages:
+    - digital signature
+    - client auth
+  issuerRef:
+    name: idfrog-client-selfsigned
+    kind: Issuer
+    group: cert-manager.io

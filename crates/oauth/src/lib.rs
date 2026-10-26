@@ -7,4 +7,5 @@
 
 pub mod client_metadata;
 pub mod discovery;
+pub mod protocol;
 pub mod token;
