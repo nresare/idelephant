@@ -30,6 +30,27 @@
 </section>
 {{/if}}
 
+{{#if identity}}
+<section class="panel" id="passkeys" aria-labelledby="passkeys-title" data-csrf-token="{{passkeys_csrf}}">
+<h2 id="passkeys-title">Passkeys</h2>
+<p>Use any of your passkeys to sign in.</p>
+<ul id="passkey-list" class="passkey-list">
+{{#each passkeys}}
+<li class="passkey-row" data-id="{{id}}"><span class="passkey-name">{{name}}</span><div class="button-group"><button type="button" class="secondary" data-action="rename">Rename</button><button type="button" class="danger" data-action="delete">Delete</button></div></li>
+{{else}}
+<li class="muted">You have no passkeys. Register one to sign in again after this session ends.</li>
+{{/each}}
+</ul>
+<button type="button" id="passkey-add" class="primary">Register a new passkey</button>
+<form id="passkey-editor" class="passkey-editor" hidden>
+<label for="passkey-name">Passkey name</label>
+<input id="passkey-name" name="name" maxlength="80" required placeholder="e.g. Work laptop" autocomplete="off">
+<div class="button-group"><button type="submit" class="primary" id="passkey-save">Register passkey</button><button type="button" class="secondary" id="passkey-cancel">Cancel</button></div>
+</form>
+<p id="passkey-status" role="status" aria-live="polite"></p>
+</section>
+{{/if}}
+
 <section class="panel" aria-labelledby="session-title">
 <div id="error-box" class="error-box" hidden role="alert" aria-live="polite">
 <button id="error-close" class="error-close" type="button" aria-label="Close error message">x</button>
@@ -48,6 +69,7 @@
 </section>
 </main>
 <script src="/static/script.js"></script>
+{{#if identity}}<script src="/static/passkeys.js"></script>{{/if}}
 <script>
 window.idElephantPendingAuthorization = {{#if pending_authorization}}true{{else}}false{{/if}};
 document.getElementById("error-close").addEventListener("click", hideError)

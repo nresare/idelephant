@@ -9,6 +9,7 @@ mod invite;
 mod later;
 mod oauth;
 mod oidc;
+mod passkeys;
 mod persistence;
 mod register;
 mod root_setup;
@@ -231,6 +232,7 @@ async fn prepare_server(
         .route("/static/{*path}", get(static_handler))
         .route("/logout", get(logout_handler))
         .merge(register_routes())
+        .merge(passkeys::routes())
         .merge(auth_routes())
         .merge(invite_routes())
         .merge(oauth_routes())
@@ -383,14 +385,20 @@ async fn index_handler(
         })
         .into_response());
     }
-    let id: Option<Identity> = session.get(IDENTITY).await?;
+    let id = auth::current_identity(&session, &state.ps).await?;
+    let keys = id.as_ref().map(passkeys::summaries);
+    let csrf = if id.is_some() {
+        Some(passkeys::csrf_token(&session).await?)
+    } else {
+        None
+    };
     let pending_authorization: bool = session
         .get::<serde_json::Value>(PENDING_AUTHORIZATION)
         .await?
         .is_some();
     Ok(Html(state.templates.render(
         "index",
-        &json!({"identity": id, "admin": oauth::current_admin(&session, &state.ps).await?, "pending_authorization": pending_authorization, "bypass_authentication": state.bypass_authentication}),
+        &json!({"identity": id, "passkeys": keys, "passkeys_csrf": csrf, "admin": oauth::current_admin(&session, &state.ps).await?, "pending_authorization": pending_authorization, "bypass_authentication": state.bypass_authentication}),
     )?).into_response())
 }
 

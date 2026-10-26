@@ -123,13 +123,15 @@ function make_register_options(challenge, user_id, email) {
     return {
         challenge: challenge,
         rp: {
-            name: "identityprovider",
+            name: "idElephant",
         },
         user: {
-            displayName: "identityprovider",
+            displayName: email,
             id: user_id,
             name: email,
         },
+        attestation: "none",
+        authenticatorSelection: {residentKey: "required", userVerification: "preferred"},
         pubKeyCredParams: [{ type: "public-key", alg: -7 }],
     }
 
@@ -159,6 +161,6 @@ function bytesToBase64(buffer) {
 }
 
 function base64ToBytes(base64) {
-    const binString = atob(base64);
+    const binString = atob(base64.replace(/-/g, "+").replace(/_/g, "/"));
     return Uint8Array.from(binString, (m) => m.codePointAt(0));
 }

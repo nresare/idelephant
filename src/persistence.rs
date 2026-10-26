@@ -147,6 +147,9 @@ pub enum IdentityState {
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
 pub struct Credential {
+    #[serde(default)]
+    #[surreal(default)]
+    pub name: String,
     pub id: Bytes,
     pub public_key: Bytes,
     pub public_key_algorithm: i32,
@@ -155,12 +158,21 @@ pub struct Credential {
 impl Credential {
     pub fn new(id: &[u8], public_key: &[u8], public_key_algorithm: i32, sign_count: u32) -> Self {
         Self {
+            name: String::new(),
             id: id.to_vec().into(),
             public_key: public_key.to_vec().into(),
             public_key_algorithm,
             sign_count,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, SurrealValue)]
+pub(crate) struct PasskeyRegistration {
+    pub subject_id: String,
+    pub challenge: Bytes,
+    pub name: String,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialOrd, PartialEq, Clone, SurrealValue)]
@@ -309,7 +321,8 @@ async fn setup_db(db: &Surreal<Any>) -> anyhow::Result<()> {
          DEFINE INDEX IF NOT EXISTS consentGrantBySubjectClientResource ON consent_grant FIELDS subject_id, client_id, resource UNIQUE;
          DEFINE INDEX IF NOT EXISTS jwkKeyKid ON jwk_key FIELDS kid UNIQUE;
          DEFINE INDEX IF NOT EXISTS jwkKeyActiveFrom ON jwk_key FIELDS active_from UNIQUE;
-         DEFINE TABLE IF NOT EXISTS sessions;"
+         DEFINE TABLE IF NOT EXISTS sessions;
+         DEFINE TABLE IF NOT EXISTS passkey_registration;"
 
     )
     .await?
@@ -858,6 +871,75 @@ impl PersistenceService {
         Ok(result.take(0)?)
     }
 
+    /// Mutate only the credential array, preserving concurrent account changes.
+    pub async fn add_passkey(
+        &self,
+        subject: &str,
+        credential: Credential,
+    ) -> Result<bool, IdentityError> {
+        let mut result = self.db.query(
+            "UPDATE $record SET state.Active.credentials += $credential WHERE state.Active.credentials != NONE AND state.Active.credentials.id CONTAINSNOT $credential_id RETURN AFTER"
+        ).bind(("record", RecordId::new("identity", subject)))
+            .bind(("credential_id", credential.id.clone())).bind(("credential", credential)).await?;
+        let updated: Vec<Identity> = result.take(0)?;
+        Ok(!updated.is_empty())
+    }
+
+    pub async fn delete_passkey(&self, subject: &str, id: &[u8]) -> Result<bool, IdentityError> {
+        let mut result = self.db.query(
+            "UPDATE $record SET state.Active.credentials = array::filter(state.Active.credentials, |$key| $key.id != $credential_id) WHERE state.Active.credentials.id CONTAINS $credential_id RETURN AFTER"
+        ).bind(("record", RecordId::new("identity", subject)))
+            .bind(("credential_id", Bytes::from(id.to_vec()))).await?;
+        let updated: Vec<Identity> = result.take(0)?;
+        Ok(!updated.is_empty())
+    }
+
+    pub async fn rename_passkey(
+        &self,
+        subject: &str,
+        id: &[u8],
+        name: String,
+    ) -> Result<bool, IdentityError> {
+        let mut result = self.db.query(
+            "UPDATE $record SET state.Active.credentials = array::map(state.Active.credentials, |$key| IF $key.id = $credential_id { object::extend($key, { name: $name }) } ELSE { $key }) WHERE state.Active.credentials.id CONTAINS $credential_id RETURN AFTER"
+        ).bind(("record", RecordId::new("identity", subject)))
+            .bind(("credential_id", Bytes::from(id.to_vec()))).bind(("name", name)).await?;
+        let updated: Vec<Identity> = result.take(0)?;
+        Ok(!updated.is_empty())
+    }
+
+    pub async fn begin_passkey_registration(
+        &self,
+        id: String,
+        registration: PasskeyRegistration,
+    ) -> Result<(), IdentityError> {
+        self.db
+            .query("DELETE passkey_registration WHERE expires_at < time::now()")
+            .await?
+            .check()?;
+        let _: Option<PasskeyRegistration> = self
+            .db
+            .create(("passkey_registration", id))
+            .content(registration)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn take_passkey_registration(
+        &self,
+        id: String,
+        subject: String,
+    ) -> Result<Option<PasskeyRegistration>, IdentityError> {
+        let mut result = self
+            .db
+            .query("DELETE $record WHERE subject_id = $subject RETURN BEFORE")
+            .bind(("record", RecordId::new("passkey_registration", id)))
+            .bind(("subject", subject))
+            .await?;
+        let records: Vec<PasskeyRegistration> = result.take(0)?;
+        Ok(records.into_iter().next())
+    }
+
     pub async fn update_identity(&self, identity: &Identity) -> Result<bool, IdentityError> {
         let id = identity.id()?;
         let result: Option<Identity> = self
@@ -1291,6 +1373,90 @@ mod tests {
             vec!["openid".to_string(), "email".to_string()]
         );
         assert_eq!(fetched.created_at, updated_at);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod passkey_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn legacy_passkeys_and_atomic_mutations() -> anyhow::Result<()> {
+        let db = mem_db().await?;
+        let ps = PersistenceService::new(db.clone());
+        ps.persist_identity_with_id(
+            "legacy",
+            Identity {
+                email: "legacy@example.com".into(),
+                created: Utc::now(),
+                admin: false,
+                id: None,
+                state: IdentityState::Active {
+                    credentials: vec![Credential::new(b"old", b"key", -7, 0)],
+                },
+            },
+        )
+        .await?;
+        db.query("UPDATE identity:legacy UNSET state.Active.credentials[0].name")
+            .await?
+            .check()?;
+        let IdentityState::Active { credentials } =
+            ps.fetch_identity("legacy").await?.unwrap().state
+        else {
+            panic!("not active")
+        };
+        assert_eq!(credentials[0].name, "");
+        // Missing names in existing records and sessions default safely.
+        let mut serialized = serde_json::to_value(&credentials[0])?;
+        serialized.as_object_mut().unwrap().remove("name");
+        let decoded: Credential = serde_json::from_value(serialized)?;
+        assert_eq!(decoded.name, "");
+        assert!(ps.rename_passkey("legacy", b"old", "Laptop".into()).await?);
+        assert!(
+            ps.add_passkey("legacy", Credential::new(b"new", b"key2", -7, 0))
+                .await?
+        );
+        assert!(
+            !ps.add_passkey("legacy", Credential::new(b"new", b"key2", -7, 0))
+                .await?
+        );
+        assert!(ps.delete_passkey("legacy", b"old").await?);
+        let IdentityState::Active { credentials } =
+            ps.fetch_identity("legacy").await?.unwrap().state
+        else {
+            panic!("not active")
+        };
+        assert_eq!(credentials.len(), 1);
+        assert_eq!(&credentials[0].id[..], b"new");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn registration_challenges_are_single_use_and_bound_to_subject() -> anyhow::Result<()> {
+        let ps = PersistenceService::new(mem_db().await?);
+        ps.begin_passkey_registration(
+            "pending".into(),
+            PasskeyRegistration {
+                subject_id: "alice".into(),
+                challenge: b"challenge".to_vec().into(),
+                name: "Phone".into(),
+                expires_at: Utc::now() + chrono::Duration::minutes(5),
+            },
+        )
+        .await?;
+        assert!(ps
+            .take_passkey_registration("pending".into(), "bob".into())
+            .await?
+            .is_none());
+        assert!(ps
+            .take_passkey_registration("pending".into(), "alice".into())
+            .await?
+            .is_some());
+        assert!(ps
+            .take_passkey_registration("pending".into(), "alice".into())
+            .await?
+            .is_none());
         Ok(())
     }
 }

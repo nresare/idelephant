@@ -31,6 +31,25 @@ struct AuthStart {
 const AUTH_CHALLENGE: &str = "idelephant.auth-challenge";
 pub const IDENTITY: &str = "idelephant.identity";
 
+pub(crate) async fn current_identity(
+    session: &Session,
+    ps: &PersistenceService,
+) -> Result<Option<Identity>, IdentityError> {
+    let Some(cached) = session.get::<Identity>(IDENTITY).await? else {
+        return Ok(None);
+    };
+    let identity = ps.fetch_identity(&cached.id()?).await?;
+    if identity
+        .as_ref()
+        .is_some_and(|identity| matches!(identity.state, Active { .. }))
+    {
+        Ok(identity)
+    } else {
+        session.remove::<Identity>(IDENTITY).await?;
+        Ok(None)
+    }
+}
+
 async fn auth_start(session: Session) -> Result<Json<AuthStart>, IdentityError> {
     let challenge = make_token();
     session.insert(AUTH_CHALLENGE, &challenge).await?;
