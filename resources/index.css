@@ -247,3 +247,11 @@ button.danger { color: var(--danger-text); background: var(--danger-bg); border-
     .admin-cards { grid-template-columns: 1fr; }
     .admin-page-heading { align-items: start; flex-direction: column; }
 }
+
+.passkey-list { list-style: none; padding: 0; }
+.passkey-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding: .8rem 0; border-bottom: 1px solid var(--border); }
+.passkey-name { overflow-wrap: anywhere; min-width: 0; }
+.passkey-editor { margin-top: 1.5rem; }
+.passkey-editor label { display: block; margin-bottom: .5rem; }
+.passkey-editor input { box-sizing: border-box; width: 100%; padding: .7rem; margin-bottom: 1rem; font: inherit; }
+.passkey-editor[hidden] { display: none; }

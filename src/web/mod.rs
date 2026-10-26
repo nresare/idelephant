@@ -51,6 +51,27 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn account_page_lists_named_passkeys_and_escapes_names() {
+        let templates = Templates::new().unwrap();
+        let html = templates
+            .render(
+                "index",
+                &json!({
+                    "identity": {"email": "alice@example.com"},
+                    "passkeys_csrf": "token",
+                    "passkeys": [{"id":"a", "name":"Laptop"}, {"id":"b", "name":"<script>"}],
+                }),
+            )
+            .unwrap();
+        assert!(html.contains("Laptop"));
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(html.contains("Register a new passkey"));
+        assert_eq!(html.matches("data-action=\"delete\"").count(), 2);
+        let anonymous = templates.render("index", &json!({})).unwrap();
+        assert!(!anonymous.contains("id=\"passkeys\""));
+    }
+
+    #[test]
     fn admin_navigation_is_only_rendered_for_admins() {
         let templates = Templates::new().unwrap();
         for admin in [false, true] {

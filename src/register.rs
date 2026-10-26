@@ -53,7 +53,11 @@ impl RegistrationService {
             relying_party_id,
         })
     }
-    fn validate(
+    pub(crate) fn relying_party_id(&self) -> &str {
+        &self.relying_party_id
+    }
+
+    pub(crate) fn validate(
         &self,
         credential: &RegisterPublicKeyCredential,
         challenge: &[u8],
@@ -73,11 +77,22 @@ async fn register_start(
     State(persistence_service): State<PersistenceService>,
 ) -> Result<Json<RegisterStartResponse>, IdentityError> {
     let challenge = make_token();
-    let Some(mut identity): Option<Identity> = session.get("idelephant.register_id").await? else {
+    let Some(identity): Option<Identity> = session.get("idelephant.register_id").await? else {
         return Err(IdentityError::Anyhow(anyhow!(
             "attempted to register without verifying email"
         )));
     };
+
+    let Some(mut identity) = persistence_service.fetch_identity(&identity.id()?).await? else {
+        return Err(IdentityError::Unauthorized(
+            "Invitation is no longer valid.".into(),
+        ));
+    };
+    if matches!(identity.state, IdentityState::Active { .. }) {
+        return Err(IdentityError::BadRequest(
+            "This account is already registered. Sign in to add a passkey.".into(),
+        ));
+    }
 
     identity.state = Allocated {
         challenge: challenge.clone().into(),
@@ -136,5 +151,6 @@ async fn register_finish(
 
     persistence_service.update_identity(&identity).await?;
     session.remove::<String>(REGISTERING_ID_KEY).await?;
+    session.remove::<Identity>("idelephant.register_id").await?;
     Ok(())
 }
