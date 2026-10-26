@@ -1,6 +1,8 @@
 root_key = "zq.luDCkyil5qf1qCJwm5lnSe97x5mROvXUMfwpOASJ0MgalZTIj"
 
 origin = "https://id.noa.re"
+session_timeout = "5d"
+max_login_time = "30d"
 tls_cert_path = "/tls/tls.crt"
 tls_key_path = "/tls/tls.key"
 

@@ -7,9 +7,14 @@ pub struct Config {
     pub origin: String,
     #[serde(
         default = "default_session_timeout",
-        deserialize_with = "deserialize_session_timeout"
+        deserialize_with = "deserialize_login_duration"
     )]
     pub session_timeout: time::Duration,
+    #[serde(
+        default = "default_max_login_time",
+        deserialize_with = "deserialize_login_duration"
+    )]
+    pub max_login_time: time::Duration,
     pub root_key: String,
     pub tls_cert_path: Option<String>,
     pub tls_key_path: Option<String>,
@@ -95,7 +100,11 @@ fn default_session_timeout() -> time::Duration {
     time::Duration::hours(1)
 }
 
-fn deserialize_session_timeout<'de, D>(deserializer: D) -> Result<time::Duration, D::Error>
+fn default_max_login_time() -> time::Duration {
+    time::Duration::days(30)
+}
+
+fn deserialize_login_duration<'de, D>(deserializer: D) -> Result<time::Duration, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -103,7 +112,7 @@ where
     let duration = humantime::parse_duration(&value).map_err(serde::de::Error::custom)?;
     if duration.is_zero() || duration > std::time::Duration::from_secs(u32::MAX.into()) {
         return Err(serde::de::Error::custom(
-            "session_timeout must be positive and at most 4294967295 seconds",
+            "login duration must be positive and at most 4294967295 seconds",
         ));
     }
     time::Duration::try_from(duration).map_err(serde::de::Error::custom)
@@ -156,6 +165,30 @@ uri = "ws://localhost:8000"
             assert!(parse(&format!("session_timeout = {value:?}")).is_err());
         }
         assert!(parse("session_timeout = 3600").is_err());
+    }
+
+    #[test]
+    fn max_login_time_defaults_to_thirty_days() {
+        assert_eq!(parse("").unwrap().max_login_time, time::Duration::days(30));
+    }
+
+    #[test]
+    fn max_login_time_can_be_configured_independently() {
+        let config = parse("session_timeout = '5d'\nmax_login_time = '30d'").unwrap();
+        assert_eq!(config.session_timeout, time::Duration::days(5));
+        assert_eq!(config.max_login_time, time::Duration::days(30));
+        assert_eq!(
+            parse("max_login_time = '1h 30m'").unwrap().max_login_time,
+            time::Duration::minutes(90)
+        );
+    }
+
+    #[test]
+    fn max_login_time_rejects_invalid_values() {
+        for value in ["0s", "-1h", "4294967296s", "", "forever", "10"] {
+            assert!(parse(&format!("max_login_time = {value:?}")).is_err());
+        }
+        assert!(parse("max_login_time = 3600").is_err());
     }
 
     fn parse_traces(settings: &str) -> Result<Config, toml::de::Error> {
