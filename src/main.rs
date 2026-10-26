@@ -12,7 +12,7 @@ mod oidc;
 mod persistence;
 mod register;
 mod root_setup;
-mod shutdown;
+use idp_server::shutdown;
 mod telemetry;
 mod tls;
 mod util;
@@ -45,12 +45,9 @@ use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
 use thiserror::Error;
 use time::Duration;
-use tower_http::trace;
-use tower_http::trace::TraceLayer;
 use tower_sessions::cookie::SameSite;
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use tower_sessions_surrealdb_store::SurrealSessionStore;
-use tracing::Level;
 use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -96,12 +93,16 @@ enum Fatal {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("idelephant=debug,tower_http=info,axum::rejection=debug")
+        EnvFilter::new("idelephant=debug,idp_server=info,axum::rejection=debug")
     });
 
     tracing_subscriber::registry()
         .with(env_filter)
-        .with(tracing_subscriber::fmt::layer().compact())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .compact()
+                .with_target(false),
+        )
         .init();
     match run().await {
         Ok(()) => Ok(()),
@@ -132,7 +133,7 @@ async fn run() -> Result<(), Fatal> {
     let provider = match &config.traces {
         Some(traces) => telemetry::provider(traces)
             .map_err(|e| Fatal::ReadConfigFile(cli.config_path.clone(), e))?,
-        None => opentelemetry_sdk::trace::SdkTracerProvider::builder().build(),
+        None => telemetry::SdkTracerProvider::builder().build(),
     };
     let result = run_server(cli, &config, &provider, signals).await;
     telemetry::shutdown(provider).await;
@@ -142,7 +143,7 @@ async fn run() -> Result<(), Fatal> {
 async fn run_server(
     cli: Cli,
     config: &Config,
-    provider: &opentelemetry_sdk::trace::SdkTracerProvider,
+    provider: &telemetry::SdkTracerProvider,
     signals: shutdown::Signals,
 ) -> Result<(), Fatal> {
     let signal = signals.wait();
@@ -202,7 +203,7 @@ struct PreparedServer {
 async fn prepare_server(
     cli: Cli,
     config: &Config,
-    provider: &opentelemetry_sdk::trace::SdkTracerProvider,
+    provider: &telemetry::SdkTracerProvider,
 ) -> Result<PreparedServer, Fatal> {
     let tls_config = tls::load(config, std::path::Path::new(&cli.config_path))
         .await
@@ -236,11 +237,7 @@ async fn prepare_server(
         .merge(groups::group_routes())
         .fallback_service(get(not_found))
         .layer(session_layer)
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
-                .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
-        )
+        .layer(axum::middleware::from_fn(idp_server::http::request))
         .with_state(state);
 
     let app = match &config.traces {

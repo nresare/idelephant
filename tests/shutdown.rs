@@ -40,7 +40,7 @@ fn sigterm_and_sigint_exit_cleanly_even_while_database_startup_is_stuck() {
             Command::new(env!("CARGO_BIN_EXE_idelephant"))
                 .arg("-c")
                 .arg(&config_path)
-                .env("RUST_LOG", "idelephant=info")
+                .env("RUST_LOG", "idelephant=info,idp_server=info")
                 .env("NO_COLOR", "1")
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())

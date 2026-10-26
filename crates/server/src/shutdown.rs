@@ -65,9 +65,9 @@ pub async fn drain(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{routing::get, Router};
+    use axum::{Router, routing::get};
     use std::sync::Arc;
-    use tokio::sync::{oneshot, Notify};
+    use tokio::sync::{Notify, oneshot};
 
     async fn exercise_shutdown(tls: bool, finish_request: bool) {
         let entered = Arc::new(Notify::new());
@@ -99,16 +99,13 @@ mod tests {
                 signal_rx.await.unwrap();
             };
             if tls {
-                let config = toml::from_str(
-                    "origin = 'https://localhost'\nroot_key = 'test'\n\
-                     tls_cert_path = 'cert.pem'\ntls_key_path = 'test-only-key.pem'\n\
-                     [email]\nrelay_host = 'localhost'\nsender_email = 'test@example.com'\n\
-                     [persistence]\nuri = 'ws://localhost:8000'\n",
+                let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/tls");
+                let config = crate::tls::load(
+                    &fixtures.join("cert.pem"),
+                    &fixtures.join("test-only-key.pem"),
                 )
+                .await
                 .unwrap();
-                let path =
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/tls/config.toml");
-                let config = crate::tls::load(&config, &path).await.unwrap().unwrap();
                 let handle = axum_server::Handle::new();
                 let server = axum_server::from_tcp_rustls(listener, config)
                     .unwrap()

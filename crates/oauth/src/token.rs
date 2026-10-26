@@ -122,6 +122,24 @@ impl TokenIssuer {
         request: AccessTokenRequest<'_>,
         now: DateTime<Utc>,
     ) -> Result<String, TokenError> {
+        self.mint_access_token_until(
+            key,
+            principal,
+            request,
+            now,
+            now + Duration::hours(TOKEN_TTL_HOURS),
+        )
+    }
+
+    /// Bound a resource token to the lifetime of its upstream authorization.
+    pub fn mint_access_token_until(
+        &self,
+        key: &SigningKey,
+        principal: &Principal<'_>,
+        request: AccessTokenRequest<'_>,
+        now: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> Result<String, TokenError> {
         let has_scope = |scope| request.scopes.iter().any(|s| s == scope);
         let userinfo = format!("{}/userinfo", self.issuer);
         let claims = AccessTokenClaims {
@@ -129,7 +147,9 @@ impl TokenIssuer {
             sub: principal.subject,
             aud: request.resource.unwrap_or(&userinfo),
             client_id: request.client_id,
-            exp: (now + Duration::hours(TOKEN_TTL_HOURS)).timestamp(),
+            exp: expires_at
+                .min(now + Duration::hours(TOKEN_TTL_HOURS))
+                .timestamp(),
             iat: now.timestamp(),
             jti: base64::engine::general_purpose::URL_SAFE_NO_PAD
                 .encode(rand::random::<[u8; 18]>()),

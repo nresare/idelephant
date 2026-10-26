@@ -19,7 +19,7 @@ RUN apt update && apt install -y libssl-dev pkgconf
 COPY --from=planner /bin/cargo-chef /bin/cargo-chef
 COPY --from=planner /build/recipe.json recipe.json
 
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --package idelephant --recipe-path recipe.json
 
 COPY . .
 RUN cargo build --locked --release -p idelephant

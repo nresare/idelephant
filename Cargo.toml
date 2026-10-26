@@ -5,16 +5,19 @@ edition = "2021"
 
 [workspace]
 resolver = "2"
-default-members = [".", "crates/oauth"]
+default-members = [".", "idfrog", "crates/oauth", "crates/server"]
 members = [
     "client",
     "common",
     "webauthn",
     "crates/oauth",
+    "crates/server",
+    "idfrog",
 ]
 
 [dependencies]
-idp-oauth = { path = "crates/oauth", version = "0.1.0" }
+idp-oauth = { version = "0.1.0", path = "crates/oauth" }
+idp-server = { version = "0.1.0", path = "crates/server", features = ["telemetry"] }
 idelephant_common = {path = "common"}
 anyhow = { workspace = true }
 axum = "0.8"
@@ -24,7 +27,6 @@ rust-embed = "8.11"
 tokio = { version = "1.51", features = ["signal"] }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 mime_guess = "2.0"
-tower-http = { version = "0.7", features = ["trace"] }
 serde = { workspace = true }
 chrono = { version = "0.4", features = ["serde"]}
 tracing = "0.1"
@@ -49,9 +51,6 @@ url = "2.5"
 p256 = { workspace = true, features = ["pkcs8", "pem"] }
 zqlu = { workspace = true }
 bytes = "1.11"
-opentelemetry = { version = "0.33", default-features = false, features = ["trace"] }
-opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace"] }
-opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "grpc-tonic", "tls-ring", "tls-webpki-roots"] }
 
 [workspace.dependencies]
 serde_json = { version = "1.0", features = ["preserve_order"] }
@@ -74,10 +73,6 @@ zqlu = "0.3"
 
 [dev-dependencies]
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }
-idp-oauth = { path = "crates/oauth", features = ["test-support"] }
-opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "testing"] }
-opentelemetry-proto = { version = "0.33", default-features = false, features = ["trace", "gen-tonic"] }
-tonic = { version = "0.14", features = ["transport"] }
-tokio-stream = { version = "0.1", features = ["net"] }
+idp-oauth = { version = "0.1.0", path = "crates/oauth", features = ["test-support"] }
 surrealdb = { version = "3", default-features = false, features = ["kv-mem"] }
 tower = { version = "0.5", features = ["util"] }

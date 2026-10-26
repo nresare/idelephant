@@ -102,3 +102,12 @@ impl From<idp_oauth::token::TokenError> for IdentityError {
         Self::Anyhow(error.into())
     }
 }
+
+impl From<idp_oauth::protocol::ProtocolError> for IdentityError {
+    fn from(error: idp_oauth::protocol::ProtocolError) -> Self {
+        match error {
+            idp_oauth::protocol::ProtocolError::BadRequest(detail) => Self::BadRequest(detail),
+            idp_oauth::protocol::ProtocolError::OAuth(code) => Self::OAuth(code),
+        }
+    }
+}
