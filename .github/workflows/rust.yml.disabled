@@ -19,10 +19,10 @@ jobs:
     - uses: Swatinem/rust-cache@v2
 
     - name: Format check
-      run: cargo fmt --check
+      run: cargo fmt --all --check
 
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --workspace --locked --verbose
 
     - name: Clippy check
-      run: cargo clippy --no-deps
+      run: cargo clippy --workspace --all-targets --locked --no-deps

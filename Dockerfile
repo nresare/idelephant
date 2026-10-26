@@ -22,7 +22,7 @@ COPY --from=planner /build/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY . .
-RUN cargo build --locked --release
+RUN cargo build --locked --release -p idelephant
 
 FROM gcr.io/distroless/cc-debian13:nonroot
 

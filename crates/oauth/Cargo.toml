@@ -1,0 +1,28 @@
+[package]
+name = "idp-oauth"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Shared OAuth and OpenID Connect building blocks for idElephant and idFrog"
+
+[features]
+# Allows application protocol tests to seed CIMD metadata without network access.
+test-support = []
+
+[dependencies]
+base64 = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+jsonwebtoken = { version = "11", features = ["rust_crypto"] }
+p256 = { workspace = true, features = ["pkcs8", "pem"] }
+rand = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "1.51", features = ["net", "sync", "time"] }
+tracing = "0.1"
+url = "2.5"
+
+[dev-dependencies]
+tokio = { version = "1.51", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { workspace = true }

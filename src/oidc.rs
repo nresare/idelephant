@@ -1,91 +1,27 @@
 use crate::error::IdentityError;
 use crate::persistence::{JwkKey, PersistenceService};
 use crate::AppState;
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use axum::extract::FromRef;
-use base64::Engine;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
-use jsonwebtoken::{Algorithm, EncodingKey, Header};
-use p256::ecdsa::{SigningKey, VerifyingKey};
+pub use idp_oauth::discovery::OpenidConfiguration;
+pub use idp_oauth::token::JwksResponse;
+use idp_oauth::token::{
+    AccessTokenRequest, IdTokenRequest, Principal, SigningKey as TokenSigningKey, TokenIssuer,
+    TOKEN_TTL_HOURS,
+};
+use p256::ecdsa::SigningKey;
 use p256::elliptic_curve::Generate;
-use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey};
-use serde::Serialize;
+use p256::pkcs8::EncodePrivateKey;
 use std::ops::Deref;
 
 const ROTATION_HOURS: i64 = 8;
-const TOKEN_TTL_HOURS: i64 = 1;
 
 #[derive(Clone)]
 pub struct OidcService {
-    issuer: String,
+    tokens: TokenIssuer,
     persistence: PersistenceService,
     pub clients: crate::client_metadata::ClientMetadataService,
-}
-
-#[derive(Serialize, Clone)]
-pub struct OpenidConfiguration {
-    issuer: String,
-    client_id_metadata_document_supported: bool,
-    authorization_response_iss_parameter_supported: bool,
-    authorization_endpoint: String,
-    token_endpoint: String,
-    userinfo_endpoint: String,
-    jwks_uri: String,
-    response_types_supported: Vec<String>,
-    subject_types_supported: Vec<String>,
-    id_token_signing_alg_values_supported: Vec<String>,
-    scopes_supported: Vec<String>,
-    token_endpoint_auth_methods_supported: Vec<String>,
-    claims_supported: Vec<String>,
-    grant_types_supported: Vec<String>,
-    code_challenge_methods_supported: Vec<String>,
-}
-
-#[derive(Serialize, Clone)]
-pub struct JwksResponse {
-    pub keys: Vec<Jwk>,
-}
-
-#[derive(Serialize, Clone)]
-pub struct Jwk {
-    pub kty: String,
-    pub crv: String,
-    #[serde(rename = "use")]
-    pub use_: String,
-    pub alg: String,
-    pub kid: String,
-    pub x: String,
-    pub y: String,
-}
-
-#[derive(Serialize)]
-struct IdTokenClaims<'a> {
-    iss: &'a str,
-    sub: &'a str,
-    aud: &'a str,
-    exp: i64,
-    iat: i64,
-    auth_time: i64,
-    nonce: Option<&'a str>,
-    email: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    groups: Option<&'a [String]>,
-}
-
-#[derive(Serialize)]
-struct AccessTokenClaims<'a> {
-    iss: &'a str,
-    sub: &'a str,
-    aud: &'a str,
-    client_id: &'a str,
-    exp: i64,
-    iat: i64,
-    jti: String,
-    scope: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    email: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    groups: Option<&'a [String]>,
 }
 
 struct PreparedKey {
@@ -96,62 +32,24 @@ struct PreparedKey {
 impl OidcService {
     pub fn new(issuer: &str, persistence: PersistenceService) -> Self {
         Self {
-            issuer: issuer.to_string(),
+            tokens: TokenIssuer::new(issuer),
             persistence,
             clients: crate::client_metadata::ClientMetadataService::default(),
         }
     }
 
     pub fn configuration(&self) -> OpenidConfiguration {
-        OpenidConfiguration {
-            issuer: self.issuer.clone(),
-            client_id_metadata_document_supported: true,
-            authorization_response_iss_parameter_supported: true,
-            authorization_endpoint: format!("{}/authorize", self.issuer),
-            token_endpoint: format!("{}/token", self.issuer),
-            userinfo_endpoint: format!("{}/userinfo", self.issuer),
-            jwks_uri: format!("{}/jwks.json", self.issuer),
-            response_types_supported: vec!["code".to_string()],
-            subject_types_supported: vec!["public".to_string()],
-            id_token_signing_alg_values_supported: vec!["ES256".to_string()],
-            scopes_supported: vec![
-                "openid".to_string(),
-                "email".to_string(),
-                "profile".to_string(),
-                "groups".to_string(),
-                "offline_access".to_string(),
-            ],
-            token_endpoint_auth_methods_supported: vec![
-                "none".to_string(),
-                "client_secret_basic".to_string(),
-            ],
-            claims_supported: vec![
-                "sub".to_string(),
-                "iss".to_string(),
-                "aud".to_string(),
-                "exp".to_string(),
-                "iat".to_string(),
-                "auth_time".to_string(),
-                "nonce".to_string(),
-                "email".to_string(),
-                "groups".to_string(),
-            ],
-            grant_types_supported: vec![
-                "authorization_code".to_string(),
-                "refresh_token".to_string(),
-            ],
-            code_challenge_methods_supported: vec!["S256".to_string()],
-        }
+        OpenidConfiguration::new(self.issuer())
     }
 
     pub fn issuer_basename(&self) -> &str {
-        self.issuer
+        self.issuer()
             .split("://")
             .nth(1)
-            .unwrap_or(&self.issuer)
+            .unwrap_or(self.issuer())
             .split('/')
             .next()
-            .unwrap_or(&self.issuer)
+            .unwrap_or(self.issuer())
     }
 
     pub async fn jwks(&self) -> Result<JwksResponse, IdentityError> {
@@ -171,7 +69,7 @@ impl OidcService {
     }
 
     pub fn issuer(&self) -> &str {
-        &self.issuer
+        self.tokens.issuer()
     }
 
     pub async fn mint_access_token(
@@ -194,31 +92,20 @@ impl OidcService {
         } else {
             None
         };
-        let userinfo = format!("{}/userinfo", self.issuer);
-        let claims = AccessTokenClaims {
-            iss: &self.issuer,
-            sub: &subject,
-            aud: resource.unwrap_or(&userinfo),
-            client_id,
-            exp: (now + Duration::hours(TOKEN_TTL_HOURS)).timestamp(),
-            iat: now.timestamp(),
-            jti: crate::util::Token::random().base64(),
-            scope: scopes.join(" "),
-            email: scopes
-                .iter()
-                .any(|s| s == "email")
-                .then_some(identity.email.as_str()),
-            groups: groups.as_deref(),
-        };
-        let mut header = Header::new(Algorithm::ES256);
-        header.typ = Some("at+jwt".into());
-        header.kid = Some(key.kid);
-        jsonwebtoken::encode(
-            &header,
-            &claims,
-            &EncodingKey::from_ec_der(&key.private_key_der),
-        )
-        .map_err(|e| anyhow!(e).into())
+        Ok(self.tokens.mint_access_token(
+            &TokenSigningKey::from_pkcs8(&key.kid, &key.private_key_der)?,
+            &Principal {
+                subject: &subject,
+                email: Some(&identity.email),
+                groups: groups.as_deref().unwrap_or_default(),
+            },
+            AccessTokenRequest {
+                client_id,
+                resource,
+                scopes,
+            },
+            now,
+        )?)
     }
 
     async fn jwks_at(&self, now: DateTime<Utc>) -> Result<JwksResponse, IdentityError> {
@@ -228,8 +115,11 @@ impl OidcService {
             .list_jwks_keys(now)
             .await?
             .into_iter()
-            .map(|key| key.public_jwk())
-            .collect();
+            .map(|key| {
+                TokenSigningKey::from_pkcs8(&key.kid, &key.private_key_der)
+                    .map(|key| key.public_jwk())
+            })
+            .collect::<Result<_, _>>()?;
         Ok(JwksResponse { keys })
     }
 
@@ -252,21 +142,21 @@ impl OidcService {
                     "No active JWK signing key available after reconciliation".to_string(),
                 )
             })?;
-        let claims = IdTokenClaims {
-            iss: &self.issuer,
-            sub: subject,
-            aud: audience,
-            exp: (now + Duration::hours(TOKEN_TTL_HOURS)).timestamp(),
-            iat: now.timestamp(),
-            auth_time: now.timestamp(),
-            nonce,
-            email,
-            groups,
-        };
-        let mut header = Header::new(Algorithm::ES256);
-        header.kid = Some(signing_key.kid.clone());
-        let encoding_key = EncodingKey::from_ec_der(&signing_key.private_key_der);
-        jsonwebtoken::encode(&header, &claims, &encoding_key).map_err(|e| anyhow!(e).into())
+        Ok(self.tokens.mint_id_token(
+            &TokenSigningKey::from_pkcs8(&signing_key.kid, &signing_key.private_key_der)?,
+            &Principal {
+                subject,
+                email: Some(email),
+                groups: groups.unwrap_or_default(),
+            },
+            IdTokenRequest {
+                audience,
+                nonce,
+                authenticated_at: now,
+                include_groups: groups.is_some(),
+            },
+            now,
+        )?)
     }
 
     async fn reconcile_keys(&self, now: DateTime<Utc>) -> Result<(), IdentityError> {
@@ -363,38 +253,6 @@ fn slot_start(now: DateTime<Utc>) -> Result<DateTime<Utc>, IdentityError> {
     Utc.with_ymd_and_hms(now.year(), now.month(), now.day(), slot_hour as u32, 0, 0)
         .single()
         .ok_or_else(|| IdentityError::Logic("Failed to calculate JWK rotation slot".to_string()))
-}
-
-fn build_jwk(verifying_key: &VerifyingKey, kid: &str) -> Jwk {
-    let encoded = verifying_key.to_sec1_point(false);
-    let x = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
-        encoded
-            .x()
-            .expect("uncompressed P-256 points always have x"),
-    );
-    let y = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
-        encoded
-            .y()
-            .expect("uncompressed P-256 points always have y"),
-    );
-    Jwk {
-        kty: "EC".to_string(),
-        crv: "P-256".to_string(),
-        use_: "sig".to_string(),
-        alg: "ES256".to_string(),
-        kid: kid.to_string(),
-        x,
-        y,
-    }
-}
-
-impl JwkKey {
-    fn public_jwk(&self) -> Jwk {
-        let signing_key = SigningKey::from_pkcs8_der(&self.private_key_der)
-            .expect("stored JWK private key must decode as P-256 secret key");
-        let verifying_key = VerifyingKey::from(&signing_key);
-        build_jwk(&verifying_key, &self.kid)
-    }
 }
 
 #[cfg(test)]
