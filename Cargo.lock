@@ -2389,6 +2389,7 @@ dependencies = [
  "humantime",
  "idelephant_common",
  "idelephant_webauthn",
+ "idp-oauth",
  "jsonwebtoken 11.1.0",
  "lettre",
  "mime_guess",
@@ -2500,6 +2501,25 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "idp-oauth"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "jsonwebtoken 11.1.0",
+ "p256 0.14.0",
+ "rand 0.10.3",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

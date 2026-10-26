@@ -6,6 +6,36 @@ this project is an example implementation of the _Relying Party_ part of the
 [W3C Web Authentication](https://www.w3.org/TR/webauthn-2/) (webauthn) standard, 
 but I have a plan and I think that the other pieces will come.
 
+## Workspace
+
+This repository contains idElephant and shared identity-platform crates. idElephant
+provides local accounts and authentication. **idFrog** is the planned identity
+broker that will delegate authentication to an upstream provider such as Entra
+and use the same platform crates.
+
+| Location | Responsibility |
+| --- | --- |
+| `src/` | idElephant server, local accounts, administration, sessions, and SurrealDB adapters |
+| `crates/oauth/` | `idp-oauth`: shared client metadata resolution, discovery metadata, and ES256 token issuance |
+| `client/` | idElephant command-line client |
+| `common/` | Public-key utilities shared with the command-line client |
+| `webauthn/` | WebAuthn implementation |
+
+Platform crates must not depend on either application, local account models, or
+SurrealDB. Applications supply authenticated identity claims, registered-client
+lookup, and signing keys. HTTP routes, authorization grants, consent, and key
+rotation currently belong to idElephant. idFrog's executable and upstream OIDC
+integration are not implemented yet.
+
+Run `cargo run -p idelephant` to start idElephant. `cargo test` covers idElephant
+and the OAuth platform crate; use the following checks for the complete workspace:
+
+```sh
+cargo fmt --all --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked --no-deps
+```
+
 ## Some design details
 
 * This software is built in Rust, relying on the crates.io ecosystem when appropriate. 

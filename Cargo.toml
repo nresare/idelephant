@@ -4,13 +4,17 @@ version = "0.2.3"
 edition = "2021"
 
 [workspace]
+resolver = "2"
+default-members = [".", "crates/oauth"]
 members = [
     "client",
     "common",
     "webauthn",
+    "crates/oauth",
 ]
 
 [dependencies]
+idp-oauth = { path = "crates/oauth", version = "0.1.0" }
 idelephant_common = {path = "common"}
 anyhow = { workspace = true }
 axum = "0.8"
@@ -42,7 +46,6 @@ clap = { workspace = true }
 lettre = { version = "0.11", features = ["native-tls", "webpki-roots", "tokio1", "tokio1-native-tls", "builder"] }
 handlebars = "6.4"
 url = "2.5"
-jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 p256 = { workspace = true, features = ["pkcs8", "pem"] }
 zqlu = { workspace = true }
 bytes = "1.11"
@@ -70,6 +73,8 @@ zqlu = "0.3"
 
 
 [dev-dependencies]
+jsonwebtoken = { version = "11", features = ["rust_crypto"] }
+idp-oauth = { path = "crates/oauth", features = ["test-support"] }
 opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "testing"] }
 opentelemetry-proto = { version = "0.33", default-features = false, features = ["trace", "gen-tonic"] }
 tonic = { version = "0.14", features = ["transport"] }

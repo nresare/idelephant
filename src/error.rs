@@ -96,3 +96,9 @@ impl From<surrealdb::Error> for IdentityError {
         IdentityError::PersistentStorage(Box::new(err))
     }
 }
+
+impl From<idp_oauth::token::TokenError> for IdentityError {
+    fn from(error: idp_oauth::token::TokenError) -> Self {
+        Self::Anyhow(error.into())
+    }
+}
