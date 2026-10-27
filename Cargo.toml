@@ -5,18 +5,15 @@ edition = "2021"
 
 [workspace]
 resolver = "2"
-default-members = [".", "crates/oauth", "crates/server"]
 members = [
     "client",
     "common",
     "webauthn",
-    "crates/oauth",
-    "crates/server",
 ]
 
 [dependencies]
-idp-oauth = { version = "0.1.0", path = "crates/oauth" }
-idp-server = { version = "0.1.0", path = "crates/server", features = ["telemetry"] }
+authzoo-oauth = "0.1.0"
+authzoo-server = { version = "0.1.0", features = ["telemetry"] }
 idelephant_common = {path = "common"}
 anyhow = { workspace = true }
 axum = "0.8"

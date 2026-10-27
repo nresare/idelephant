@@ -224,6 +224,47 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "authzoo-oauth"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7b896ad216c6ec75210a94430866ea3d5b28fc14757750f1a9fd8c45cf0ffc1"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "jsonwebtoken 11.1.0",
+ "p256 0.14.0",
+ "rand 0.10.3",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "subtle",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "authzoo-server"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e30b66abd364e47019ae139ad454c4b36a2d3cb4ad9c4571877abc7e8f350748"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum-server",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "rustls",
+ "serde",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2379,6 +2420,8 @@ name = "idelephant"
 version = "0.2.3"
 dependencies = [
  "anyhow",
+ "authzoo-oauth",
+ "authzoo-server",
  "axum",
  "axum-server",
  "base64 0.23.1",
@@ -2389,8 +2432,6 @@ dependencies = [
  "humantime",
  "idelephant_common",
  "idelephant_webauthn",
- "idp-oauth",
- "idp-server",
  "jsonwebtoken 11.1.0",
  "lettre",
  "mime_guess",
@@ -2495,49 +2536,6 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
-]
-
-[[package]]
-name = "idp-oauth"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "chrono",
- "jsonwebtoken 11.1.0",
- "p256 0.14.0",
- "rand 0.10.3",
- "reqwest 0.13.5",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "subtle",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
-name = "idp-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "axum-server",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry-proto",
- "opentelemetry_sdk",
- "reqwest 0.13.5",
- "rustls",
- "serde",
- "tokio",
- "tokio-stream",
- "tonic",
- "tower",
- "tracing",
- "url",
 ]
 
 [[package]]
@@ -3418,7 +3416,6 @@ dependencies = [
  "portable-atomic",
  "rand 0.9.5",
  "thiserror",
- "tokio",
 ]
 
 [[package]]

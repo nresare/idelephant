@@ -25,7 +25,7 @@ pub struct Config {
     pub traces: Option<TracesConfig>,
 }
 
-pub use idp_server::telemetry::TracesConfig;
+pub use authzoo_server::telemetry::TracesConfig;
 
 fn deserialize_traces<'de, D: serde::Deserializer<'de>>(
     deserializer: D,

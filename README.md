@@ -8,28 +8,21 @@ but I have a plan and I think that the other pieces will come.
 
 ## Workspace
 
-idElephant shares reusable platform crates with
-[idFrog](https://github.com/nresare/idfrog), which lives in its own repository.
-Applications keep their authentication policy, routes, configuration, and grant
-storage. Shared crates do not depend on either application or SurrealDB.
+idElephant uses the `authzoo-oauth` and `authzoo-server` crates from
+[authzoo](https://github.com/nresare/authzoo) for OAuth/OIDC building blocks and
+HTTP server infrastructure, shared with [idFrog](https://github.com/nresare/idfrog).
+idElephant keeps its authentication policy, routes, configuration, and grant
+storage.
 
 | Location | Responsibility |
 | --- | --- |
 | `src/` | idElephant accounts, administration, sessions, consent, persistence, and signing-key rotation |
-| `crates/oauth/` | `idp-oauth`: client metadata, discovery, request validation, PKCE, redirects, and ES256 tokens |
-| `crates/server/` | `idp-server`: request logging, TLS loading, and bounded graceful shutdown |
 | `client/` | idElephant command-line client |
 | `common/` | Public-key utilities shared with the command-line client |
 | `webauthn/` | WebAuthn implementation |
 
-idElephant declares platform dependencies with a version and a local path.
-Cargo uses the paths for development and strips them when packaging a consumer
-for publication. Independent consumers use the published versions from
-crates.io.
-
 ```sh
 cargo fmt --all --check
-cargo test -p idp-oauth -p idp-server --locked
 cargo test -p idelephant --locked
 cargo clippy --workspace --all-targets --locked --no-deps
 ```

@@ -1,8 +1,8 @@
 //! Adapt idElephant's registered clients to the shared OAuth client resolver.
 use crate::error::IdentityError;
 use crate::persistence::{OAuthClient, PersistenceService};
-pub use idp_oauth::client_metadata::{ApplicationType, Client};
-use idp_oauth::client_metadata::{
+pub use authzoo_oauth::client_metadata::{ApplicationType, Client};
+use authzoo_oauth::client_metadata::{
     ClientMetadataService, ClientRegistry, MetadataError, ResolveError,
 };
 

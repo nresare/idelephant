@@ -2,14 +2,14 @@ use crate::error::IdentityError;
 use crate::persistence::{JwkKey, PersistenceService};
 use crate::AppState;
 use anyhow::Context;
-use axum::extract::FromRef;
-use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
-pub use idp_oauth::discovery::OpenidConfiguration;
-pub use idp_oauth::token::JwksResponse;
-use idp_oauth::token::{
+pub use authzoo_oauth::discovery::OpenidConfiguration;
+pub use authzoo_oauth::token::JwksResponse;
+use authzoo_oauth::token::{
     AccessTokenRequest, IdTokenRequest, Principal, SigningKey as TokenSigningKey, TokenIssuer,
     TOKEN_TTL_HOURS,
 };
+use axum::extract::FromRef;
+use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 use p256::ecdsa::SigningKey;
 use p256::elliptic_curve::Generate;
 use p256::pkcs8::EncodePrivateKey;
