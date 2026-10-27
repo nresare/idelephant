@@ -41,7 +41,6 @@ aws-smithy-http-client = { version = "1.5.2", features = ["rustls-ring"], option
 
 [dev-dependencies]
 rsa = "0.9"
-rand_legacy = { package = "rand", version = "0.8" }
 reqwest = { version = "0.13", features = ["json", "rustls"] }
 tower = { version = "0.5", features = ["util"] }
 idp-oauth = { version = "0.1.0", path = "../crates/oauth", features = ["test-support"] }
