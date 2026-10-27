@@ -280,16 +280,14 @@ fn provider_key(algorithm: Algorithm) -> (EncodingKey, Value) {
             serde_json::to_value(jwk).unwrap(),
         );
     }
-    use rsa::{pkcs1::EncodeRsaPrivateKey as _, traits::PublicKeyParts};
-    static KEY: std::sync::OnceLock<(Vec<u8>, Value)> = std::sync::OnceLock::new();
-    let (der, jwk) = KEY.get_or_init(|| {
-        let key = rsa::RsaPrivateKey::new(&mut rand_legacy::rngs::OsRng, 2048).unwrap();
-        let jwk = json!({"kty":"RSA", "kid":"upstream-key", "use":"sig", "alg":"RS256",
-            "n":URL_SAFE_NO_PAD.encode(key.n().to_bytes_be()),
-            "e":URL_SAFE_NO_PAD.encode(key.e().to_bytes_be())});
-        (key.to_pkcs1_der().unwrap().as_bytes().to_vec(), jwk)
-    });
-    (EncodingKey::from_rsa_der(der), jwk.clone())
+    use rsa::{pkcs8::DecodePrivateKey as _, traits::PublicKeyParts};
+    // A committed key: generating RSA keys in unoptimized test builds takes seconds.
+    const PEM: &str = include_str!("fixtures/test-only-provider-key.pem");
+    let key = rsa::RsaPrivateKey::from_pkcs8_pem(PEM).unwrap();
+    let jwk = json!({"kty":"RSA", "kid":"upstream-key", "use":"sig", "alg":"RS256",
+        "n":URL_SAFE_NO_PAD.encode(key.n().to_bytes_be()),
+        "e":URL_SAFE_NO_PAD.encode(key.e().to_bytes_be())});
+    (EncodingKey::from_rsa_pem(PEM.as_bytes()).unwrap(), jwk)
 }
 
 struct Fixture {

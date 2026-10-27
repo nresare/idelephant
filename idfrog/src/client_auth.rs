@@ -231,9 +231,7 @@ mod tests {
     fn malformed_or_mismatched_credentials_are_rejected() {
         assert!(CertificateAssertion::from_pem(b"invalid certificate", KEY).is_err());
         assert!(CertificateAssertion::from_pem(CERTIFICATE, b"invalid key").is_err());
-        use rsa::pkcs8::EncodePrivateKey as _;
-        let other = rsa::RsaPrivateKey::new(&mut rand_legacy::rngs::OsRng, 2048).unwrap();
-        let other = other.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).unwrap();
-        assert!(CertificateAssertion::from_pem(CERTIFICATE, other.as_bytes()).is_err());
+        let other = include_bytes!("../tests/fixtures/test-only-provider-key.pem");
+        assert!(CertificateAssertion::from_pem(CERTIFICATE, other).is_err());
     }
 }
