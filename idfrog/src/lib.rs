@@ -2,6 +2,8 @@
 mod access;
 mod client_auth;
 pub mod config;
+#[cfg(feature = "dynamodb")]
+pub mod dynamodb;
 pub mod error;
 pub mod protocol;
 pub use idp_server::shutdown;

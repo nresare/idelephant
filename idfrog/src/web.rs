@@ -7,8 +7,7 @@ use crate::{
         valid_verifier, validate_authorization_request, validate_pending_client, verify_pkce,
     },
     state::{
-        CODE_LIMIT, CodeGrant, MemoryState, REFRESH_LIMIT, ROTATION_LIMIT, RefreshGrant,
-        TRANSACTION_LIMIT, Transaction, random_token, secrets_equal, token_hash,
+        CodeGrant, RefreshGrant, Store, Transaction, random_token, token_hash, transaction_deadline,
     },
     upstream::{Upstream, UpstreamIdentity},
 };
@@ -29,8 +28,8 @@ use idp_oauth::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, sync::Arc};
-use tokio::sync::{Mutex, Semaphore};
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -39,19 +38,19 @@ pub struct AppState {
     key: Arc<SigningKey>,
     tokens: TokenIssuer,
     clients: ClientMetadataService,
-    memory: Arc<Mutex<MemoryState>>,
+    store: Store,
     upstream_slots: Arc<Semaphore>,
 }
 
 impl AppState {
-    pub fn new(config: Config, upstream: Upstream, key: SigningKey) -> Self {
+    pub fn new(config: Config, upstream: Upstream, key: SigningKey, store: Store) -> Self {
         Self {
             tokens: TokenIssuer::new(&config.origin),
             config: Arc::new(config),
             upstream: Arc::new(upstream),
             key: Arc::new(key),
             clients: ClientMetadataService::default(),
-            memory: Arc::new(Mutex::new(MemoryState::default())),
+            store,
             upstream_slots: Arc::new(Semaphore::new(32)),
         }
     }
@@ -172,20 +171,18 @@ async fn authorize(
         offline,
         pending.resource.as_deref().ok_or(BrokerError::Internal)?,
     )?;
-    let mut memory = state.memory.lock().await;
-    memory.cleanup(Utc::now());
-    if memory.transactions.len() >= TRANSACTION_LIMIT {
-        return Err(BrokerError::Capacity);
-    }
-    memory.transactions.insert(
-        upstream_state,
-        Transaction {
-            binding,
-            request: pending,
-            expires_at: MemoryState::transaction_deadline(),
-            challenge,
-        },
-    );
+    state
+        .store
+        .insert_transaction(
+            &upstream_state,
+            Transaction {
+                binding,
+                request: pending,
+                expires_at: transaction_deadline(),
+                challenge,
+            },
+        )
+        .await?;
     Ok((jar.add(cookie), Redirect::to(&url)))
 }
 
@@ -207,23 +204,10 @@ async fn callback(
         .upstream_slots
         .try_acquire()
         .map_err(|_| BrokerError::Capacity)?;
-    let transaction = {
-        let mut memory = state.memory.lock().await;
-        memory.cleanup(Utc::now());
-        let transaction = memory.transactions.get(&callback.state).ok_or_else(|| {
-            BrokerError::rejected("invalid_request", "unknown_or_expired_login_state")
-        })?;
-        if !secrets_equal(binding, &transaction.binding) {
-            return Err(BrokerError::rejected(
-                "invalid_request",
-                "browser_binding_mismatch",
-            ));
-        }
-        memory
-            .transactions
-            .remove(&callback.state)
-            .ok_or(BrokerError::OAuth("invalid_request"))?
-    };
+    let transaction = state
+        .store
+        .take_transaction(&callback.state, binding)
+        .await?;
     if callback
         .iss
         .as_ref()
@@ -288,19 +272,17 @@ async fn callback(
             ("iss", Some(&state.config.origin)),
         ],
     )?;
-    let mut memory = state.memory.lock().await;
-    memory.cleanup(Utc::now());
-    if memory.codes.len() >= CODE_LIMIT {
-        return Err(BrokerError::Capacity);
-    }
-    memory.codes.insert(
-        token_hash(&code),
-        CodeGrant {
-            request: transaction.request,
-            identity,
-            expires_at: MemoryState::transaction_deadline(),
-        },
-    );
+    state
+        .store
+        .insert_code(
+            &token_hash(&code),
+            CodeGrant {
+                request: transaction.request,
+                identity,
+                expires_at: transaction_deadline(),
+            },
+        )
+        .await?;
     Ok(Redirect::to(&redirect).into_response())
 }
 
@@ -377,58 +359,43 @@ async fn token(
             "unsupported_token_grant_type",
         ));
     }
-    let grant = {
-        let mut memory = state.memory.lock().await;
-        memory.cleanup(Utc::now());
-        let hash = token_hash(&request.code);
-        let grant = memory.codes.get(&hash).ok_or_else(|| {
-            BrokerError::rejected(
-                "invalid_grant",
-                "unknown_expired_or_used_authorization_code",
-            )
-        })?;
-        let pending = &grant.request;
-        for (invalid, reason) in [
-            (
-                pending.client_id != request.client_id,
-                "code_client_mismatch",
-            ),
-            (
-                pending.redirect_uri != request.redirect_uri,
-                "code_redirect_mismatch",
-            ),
-            (
-                !client.allows_redirect(&pending.redirect_uri),
-                "redirect_no_longer_registered",
-            ),
-            (
-                request.resource != pending.resource,
-                "code_resource_mismatch",
-            ),
-            (
-                !valid_verifier(&request.code_verifier),
-                "invalid_pkce_verifier",
-            ),
-            (
-                !verify_pkce(&request.code_verifier, &pending.code_challenge),
-                "pkce_mismatch",
-            ),
-        ] {
-            if invalid {
-                return Err(BrokerError::rejected("invalid_grant", reason));
+    let grant = state
+        .store
+        .take_code(&token_hash(&request.code), |grant| {
+            let pending = &grant.request;
+            for (invalid, reason) in [
+                (
+                    pending.client_id != request.client_id,
+                    "code_client_mismatch",
+                ),
+                (
+                    pending.redirect_uri != request.redirect_uri,
+                    "code_redirect_mismatch",
+                ),
+                (
+                    !client.allows_redirect(&pending.redirect_uri),
+                    "redirect_no_longer_registered",
+                ),
+                (
+                    request.resource != pending.resource,
+                    "code_resource_mismatch",
+                ),
+                (
+                    !valid_verifier(&request.code_verifier),
+                    "invalid_pkce_verifier",
+                ),
+                (
+                    !verify_pkce(&request.code_verifier, &pending.code_challenge),
+                    "pkce_mismatch",
+                ),
+            ] {
+                if invalid {
+                    return Err(BrokerError::rejected("invalid_grant", reason));
+                }
             }
-        }
-        if pending.scopes.iter().any(|s| s == "offline_access")
-            && memory.refresh.len() >= REFRESH_LIMIT
-        {
-            return Err(BrokerError::Capacity);
-        }
-        // Validation and removal share one lock: concurrent exchanges cannot both succeed.
-        memory
-            .codes
-            .remove(&hash)
-            .ok_or(BrokerError::OAuth("invalid_grant"))?
-    };
+            Ok(())
+        })
+        .await?;
     let scopes = initial_scopes(&grant.identity, &grant.request.scopes);
     let claims_scopes: Vec<String> = grant
         .request
@@ -449,16 +416,12 @@ async fn token(
             scopes: scopes.clone(),
             claims_scopes: claims_scopes.clone(),
             identity: grant.identity.clone(),
-            current_hash: token_hash(&raw),
-            used_hashes: HashSet::new(),
-            busy: false,
             expires_at: Utc::now() + Duration::days(30),
         };
-        let mut memory = state.memory.lock().await;
-        if memory.refresh.len() >= REFRESH_LIMIT {
-            return Err(BrokerError::Capacity);
-        }
-        memory.refresh.insert(random_token(), family);
+        state
+            .store
+            .insert_refresh(&token_hash(&raw), family)
+            .await?;
         Some(raw)
     } else {
         None
@@ -577,78 +540,50 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
         .try_acquire()
         .map_err(|_| BrokerError::Capacity)?;
     let hash = token_hash(&request.refresh_token);
-    let (family_id, identity, resource, mut scopes, claims_scopes) = {
-        let mut memory = state.memory.lock().await;
-        memory.cleanup(Utc::now());
-        let family_id = memory
-            .refresh
-            .iter()
-            .find(|(_, family)| family.current_hash == hash || family.used_hashes.contains(&hash))
-            .map(|(id, _)| id.clone())
-            .ok_or_else(|| {
-                BrokerError::rejected("invalid_grant", "unknown_or_expired_refresh_token")
-            })?;
-        let family = memory
-            .refresh
-            .get_mut(&family_id)
-            .ok_or(BrokerError::OAuth("invalid_grant"))?;
-        if family.client_id != request.client_id
-            || request
-                .resource
-                .as_ref()
-                .is_some_and(|r| r != &family.resource)
-        {
-            return Err(BrokerError::rejected(
-                "invalid_grant",
-                "refresh_client_or_resource_mismatch",
-            ));
-        }
-        if family.busy
-            || family.used_hashes.contains(&hash)
-            || family.used_hashes.len() >= ROTATION_LIMIT
-        {
-            memory.refresh.remove(&family_id);
-            return Err(BrokerError::rejected(
-                "invalid_grant",
-                "refresh_replay_or_rotation_limit",
-            ));
-        }
-        let scopes = match request.scope {
-            Some(scope) => {
-                let scopes: Vec<String> = scope.split_whitespace().map(str::to_string).collect();
-                if scopes.is_empty() || scopes.iter().any(|s| !family.scopes.contains(s)) {
-                    return Err(BrokerError::rejected(
-                        "invalid_scope",
-                        "refresh_scope_widening_or_empty_scope",
-                    ));
-                }
-                scopes
-            }
-            None => family.scopes.clone(),
-        };
-        family.busy = true;
-        family.used_hashes.insert(hash.clone());
-        (
-            family_id,
-            family.identity.clone(),
-            family.resource.clone(),
-            scopes.clone(),
-            family
-                .claims_scopes
-                .iter()
-                .filter(|scope| scopes.contains(scope))
-                .cloned()
-                .collect::<Vec<_>>(),
+    let requested = request.scope.clone();
+    let (family_id, family, (mut scopes, claims_scopes)) = state
+        .store
+        .begin_refresh(
+            &hash,
+            &request.client_id,
+            request.resource.as_deref(),
+            |family| {
+                let scopes = match requested {
+                    Some(scope) => {
+                        let scopes: Vec<String> =
+                            scope.split_whitespace().map(str::to_string).collect();
+                        if scopes.is_empty() || scopes.iter().any(|s| !family.scopes.contains(s)) {
+                            return Err(BrokerError::rejected(
+                                "invalid_scope",
+                                "refresh_scope_widening_or_empty_scope",
+                            ));
+                        }
+                        scopes
+                    }
+                    None => family.scopes.clone(),
+                };
+                let claims_scopes = family
+                    .claims_scopes
+                    .iter()
+                    .filter(|scope| scopes.contains(scope))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                Ok((scopes, claims_scopes))
+            },
         )
-    };
+        .await?;
     let updated = match state
         .upstream
-        .refresh(&identity, &resource, state.needs_groups(&claims_scopes))
+        .refresh(
+            &family.identity,
+            &family.resource,
+            state.needs_groups(&claims_scopes),
+        )
         .await
     {
         Ok(identity) => identity,
         Err(_) => {
-            state.memory.lock().await.refresh.remove(&family_id);
+            state.store.revoke_refresh(&family_id).await?;
             return Err(BrokerError::rejected(
                 "invalid_grant",
                 "upstream_refresh_validation_failed",
@@ -659,19 +594,20 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
     // still present in the newly verified API token. New rights require login.
     scopes.retain(|scope| claims_scopes.contains(scope) || updated.api_scopes.contains(scope));
     let replacement = random_token();
-    {
-        let mut memory = state.memory.lock().await;
-        memory.cleanup(Utc::now());
-        // A concurrent replay may have revoked the family while upstream was contacted.
-        let family = memory.refresh.get_mut(&family_id).ok_or_else(|| {
-            BrokerError::rejected("invalid_grant", "refresh_family_revoked_during_exchange")
-        })?;
-        family.identity = updated.clone();
-        family.scopes = scopes.clone();
-        family.claims_scopes = claims_scopes.clone();
-        family.current_hash = token_hash(&replacement);
-        family.busy = false;
-    }
+    let resource = family.resource.clone();
+    state
+        .store
+        .finish_refresh(
+            &family_id,
+            RefreshGrant {
+                identity: updated.clone(),
+                scopes: scopes.clone(),
+                claims_scopes: claims_scopes.clone(),
+                ..family
+            },
+            &token_hash(&replacement),
+        )
+        .await?;
     make_tokens(
         state,
         TokenGrant {

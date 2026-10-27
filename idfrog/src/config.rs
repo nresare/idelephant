@@ -23,6 +23,32 @@ pub struct Config {
     pub traces: Option<TracesConfig>,
     #[serde(default)]
     pub clients: Vec<RegisteredClient>,
+    #[serde(default)]
+    pub state: StateConfig,
+}
+
+/// Where grant state lives. DynamoDB requires the `dynamodb` build feature.
+#[derive(Clone, Deserialize)]
+#[serde(
+    tag = "backend",
+    rename_all = "kebab-case",
+    rename_all_fields = "kebab-case",
+    deny_unknown_fields
+)]
+pub enum StateConfig {
+    // A struct variant, so that deny_unknown_fields applies to it.
+    Memory {},
+    Dynamodb {
+        table: String,
+        region: Option<String>,
+        endpoint_url: Option<String>,
+    },
+}
+
+impl Default for StateConfig {
+    fn default() -> Self {
+        Self::Memory {}
+    }
 }
 
 pub use idp_server::telemetry::TracesConfig;
@@ -193,6 +219,11 @@ impl Config {
                     "Registered clients need a unique non-empty client_id, name, and valid redirect_uris"
                 );
             }
+        }
+        if let StateConfig::Dynamodb { table, .. } = &self.state
+            && table.trim().is_empty()
+        {
+            bail!("state.table must not be empty");
         }
         if self.tls_cert_path.is_some() != self.tls_key_path.is_some() {
             bail!("Configure both tls-cert-path and tls-key-path");
