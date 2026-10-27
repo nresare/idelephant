@@ -73,6 +73,5 @@ zqlu = "0.3"
 
 [dev-dependencies]
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }
-idp-oauth = { version = "0.1.0", path = "crates/oauth", features = ["test-support"] }
 surrealdb = { version = "3", default-features = false, features = ["kv-mem"] }
 tower = { version = "0.5", features = ["util"] }

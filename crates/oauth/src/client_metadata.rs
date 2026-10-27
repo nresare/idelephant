@@ -223,9 +223,9 @@ fn invalid(id: &str, reason: &str) -> MetadataError {
 }
 
 impl ClientMetadataService {
-    /// Seed validated metadata for offline application tests.
-    #[cfg(any(test, feature = "test-support"))]
-    pub async fn cache_document(&self, id: &str, bytes: &[u8]) -> Result<(), MetadataError> {
+    /// Seed validated metadata for offline tests.
+    #[cfg(test)]
+    async fn cache_document(&self, id: &str, bytes: &[u8]) -> Result<(), MetadataError> {
         metadata_url(id)?;
         let client = parse_document(id, bytes)?;
         self.cache.lock().await.insert(
