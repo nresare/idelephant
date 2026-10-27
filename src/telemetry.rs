@@ -1,2 +1,2 @@
 //! Shared OTLP tracing infrastructure.
-pub use idp_server::telemetry::*;
+pub use authzoo_server::telemetry::*;

@@ -97,17 +97,17 @@ impl From<surrealdb::Error> for IdentityError {
     }
 }
 
-impl From<idp_oauth::token::TokenError> for IdentityError {
-    fn from(error: idp_oauth::token::TokenError) -> Self {
+impl From<authzoo_oauth::token::TokenError> for IdentityError {
+    fn from(error: authzoo_oauth::token::TokenError) -> Self {
         Self::Anyhow(error.into())
     }
 }
 
-impl From<idp_oauth::protocol::ProtocolError> for IdentityError {
-    fn from(error: idp_oauth::protocol::ProtocolError) -> Self {
+impl From<authzoo_oauth::protocol::ProtocolError> for IdentityError {
+    fn from(error: authzoo_oauth::protocol::ProtocolError) -> Self {
         match error {
-            idp_oauth::protocol::ProtocolError::BadRequest(detail) => Self::BadRequest(detail),
-            idp_oauth::protocol::ProtocolError::OAuth(code) => Self::OAuth(code),
+            authzoo_oauth::protocol::ProtocolError::BadRequest(detail) => Self::BadRequest(detail),
+            authzoo_oauth::protocol::ProtocolError::OAuth(code) => Self::OAuth(code),
         }
     }
 }

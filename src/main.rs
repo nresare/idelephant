@@ -13,7 +13,7 @@ mod passkeys;
 mod persistence;
 mod register;
 mod root_setup;
-use idp_server::shutdown;
+use authzoo_server::shutdown;
 mod telemetry;
 mod tls;
 mod util;
@@ -94,7 +94,7 @@ enum Fatal {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("idelephant=debug,idp_server=info,axum::rejection=debug")
+        EnvFilter::new("idelephant=debug,authzoo_server=info,axum::rejection=debug")
     });
 
     tracing_subscriber::registry()
@@ -243,7 +243,7 @@ async fn prepare_server(
             auth::enforce_max_login_time,
         ))
         .layer(session_layer)
-        .layer(axum::middleware::from_fn(idp_server::http::request))
+        .layer(axum::middleware::from_fn(authzoo_server::http::request))
         .with_state(state);
 
     let app = match &config.traces {

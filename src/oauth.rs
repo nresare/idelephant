@@ -85,7 +85,7 @@ async fn authorization_error_page(response: Response) -> Response {
 
 pub const PENDING_AUTHORIZATION: &str = "idelephant.oauth.pending-authorization";
 
-use idp_oauth::protocol::{verify_pkce, AuthorizationRequest, PendingAuthorizationRequest};
+use authzoo_oauth::protocol::{verify_pkce, AuthorizationRequest, PendingAuthorizationRequest};
 
 #[derive(Debug, Deserialize)]
 struct ConsentRequest {
@@ -756,8 +756,8 @@ fn validate_authorization_request(
     request: AuthorizationRequest,
     client: &Client,
 ) -> Result<PendingAuthorizationRequest, IdentityError> {
-    use idp_oauth::protocol::{AuthorizationPolicy, ResourceRequirement, ScopePolicy};
-    Ok(idp_oauth::protocol::validate_authorization_request(
+    use authzoo_oauth::protocol::{AuthorizationPolicy, ResourceRequirement, ScopePolicy};
+    Ok(authzoo_oauth::protocol::validate_authorization_request(
         request,
         client,
         AuthorizationPolicy {
@@ -771,7 +771,7 @@ fn validate_pending_client(
     pending: &PendingAuthorizationRequest,
     client: &Client,
 ) -> Result<(), IdentityError> {
-    Ok(idp_oauth::protocol::validate_pending_client(
+    Ok(authzoo_oauth::protocol::validate_pending_client(
         pending, client,
     )?)
 }
@@ -849,7 +849,7 @@ fn consent_satisfies_request(
 }
 
 fn build_redirect(uri: &str, params: &[(&str, Option<&str>)]) -> Result<String, IdentityError> {
-    Ok(idp_oauth::protocol::build_redirect(uri, params)?)
+    Ok(authzoo_oauth::protocol::build_redirect(uri, params)?)
 }
 
 // Client secrets are deliberately ignored: all registered clients still require PKCE.
