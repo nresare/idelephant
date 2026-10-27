@@ -5,14 +5,13 @@ edition = "2021"
 
 [workspace]
 resolver = "2"
-default-members = [".", "idfrog", "crates/oauth", "crates/server"]
+default-members = [".", "crates/oauth", "crates/server"]
 members = [
     "client",
     "common",
     "webauthn",
     "crates/oauth",
     "crates/server",
-    "idfrog",
 ]
 
 [dependencies]
