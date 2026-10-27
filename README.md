@@ -8,37 +8,33 @@ but I have a plan and I think that the other pieces will come.
 
 ## Workspace
 
-idElephant and [idFrog](idfrog/README.md) share a Cargo workspace and reusable
-platform crates. Applications keep their authentication policy, routes,
-configuration, and grant storage. Shared crates do not depend on either
-application or SurrealDB.
+idElephant shares reusable platform crates with
+[idFrog](https://github.com/nresare/idfrog), which lives in its own repository.
+Applications keep their authentication policy, routes, configuration, and grant
+storage. Shared crates do not depend on either application or SurrealDB.
 
 | Location | Responsibility |
 | --- | --- |
 | `src/` | idElephant accounts, administration, sessions, consent, persistence, and signing-key rotation |
-| `idfrog/` | idFrog upstream OIDC authentication, delegated API permissions, and in-memory grants |
 | `crates/oauth/` | `idp-oauth`: client metadata, discovery, request validation, PKCE, redirects, and ES256 tokens |
 | `crates/server/` | `idp-server`: request logging, TLS loading, and bounded graceful shutdown |
 | `client/` | idElephant command-line client |
 | `common/` | Public-key utilities shared with the command-line client |
 | `webauthn/` | WebAuthn implementation |
 
-Both applications declare platform dependencies with a version and a local path.
-Cargo uses the paths for monorepo development and strips them when packaging a
-consumer for publication. Independent consumers use the published versions from
+idElephant declares platform dependencies with a version and a local path.
+Cargo uses the paths for development and strips them when packaging a consumer
+for publication. Independent consumers use the published versions from
 crates.io.
 
 ```sh
 cargo fmt --all --check
-cargo test -p idp-oauth -p idp-server -p idfrog --locked
+cargo test -p idp-oauth -p idp-server --locked
 cargo test -p idelephant --locked
 cargo clippy --workspace --all-targets --locked --no-deps
 ```
 
-Run `cargo run -p idelephant` or `cargo run -p idfrog -- -c path/to/idfrog.toml`.
-Build idFrog from the repository root with
-`docker build -f idfrog/Dockerfile -t idfrog .`; cargo-chef then sees the complete
-workspace and its shared sources inside the Docker build context.
+Run `cargo run -p idelephant`.
 
 ## Some design details
 
