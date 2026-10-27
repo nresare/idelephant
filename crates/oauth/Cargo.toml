@@ -11,10 +11,6 @@ keywords = ["oauth", "openid-connect", "mcp", "pkce"]
 categories = ["authentication", "web-programming"]
 include = ["src/**", "tests/**", "Cargo.toml", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
 
-[features]
-# Allows application protocol tests to seed CIMD metadata without network access.
-test-support = []
-
 [dependencies]
 base64 = { version = "0.23" }
 chrono = { version = "0.4", features = ["serde"] }

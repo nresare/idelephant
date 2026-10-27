@@ -28,9 +28,6 @@ HTTP endpoints, sessions, authorization codes, refresh-token replay detection,
 consent, and signing-key storage and rotation. This crate is not a standalone
 OAuth authorization server or an upstream OIDC login client.
 
-The `test-support` feature enables validated metadata cache seeding for application
-protocol tests without network access. Leave it disabled for production builds.
-
 Metadata diagnostics use the `idp_oauth::client_metadata` tracing target.
 
 Run `cargo test -p idp-oauth` for tests independent of idElephant and its database.

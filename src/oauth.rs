@@ -917,7 +917,7 @@ mod tests {
         CreateOAuthClientRequest, PendingAuthorizationRequest, TokenRequest, PENDING_AUTHORIZATION,
     };
     use crate::auth::IDENTITY;
-    use crate::client_metadata::Client;
+    use crate::client_metadata::{ApplicationType, Client};
     use crate::config::EmailConfig;
     use crate::error::IdentityError;
     use crate::invite::InviteService;
@@ -2050,19 +2050,17 @@ mod tests {
         let client_id = "https://client.example/oauth/client.json";
         let resource = "https://mcp.example/mcp";
         let oidc = Arc::new(OidcService::new(issuer, persistence.as_ref().clone()));
-        // Seed a validated cached document, keeping the HTTP flow deterministic.
-        oidc.clients
-            .cache_document(
-                client_id,
-                &serde_json::to_vec(&json!({
-                    "client_id": client_id, "client_name": "MCP client",
-                    "redirect_uris": [registered],
-                    "application_type": application_type,
-                    "token_endpoint_auth_method": "none",
-                    "grant_types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer"]
-                }))?,
-            )
-            .await?;
+        // Seed the client its metadata document describes, keeping the HTTP flow deterministic.
+        oidc.clients.seed(Client {
+            client_id: client_id.into(),
+            name: "MCP client".into(),
+            redirect_uris: vec![registered.into()],
+            cimd: true,
+            application_type: match application_type {
+                "native" => ApplicationType::Native,
+                _ => ApplicationType::Web,
+            },
+        });
         let app = test_app(
             AppState {
                 ps: persistence.clone(),

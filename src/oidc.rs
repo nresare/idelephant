@@ -21,7 +21,7 @@ const ROTATION_HOURS: i64 = 8;
 pub struct OidcService {
     tokens: TokenIssuer,
     persistence: PersistenceService,
-    pub clients: crate::client_metadata::ClientMetadataService,
+    pub clients: crate::client_metadata::ClientResolver,
 }
 
 struct PreparedKey {
@@ -34,7 +34,7 @@ impl OidcService {
         Self {
             tokens: TokenIssuer::new(issuer),
             persistence,
-            clients: crate::client_metadata::ClientMetadataService::default(),
+            clients: crate::client_metadata::ClientResolver::default(),
         }
     }
 
