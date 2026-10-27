@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand};
 use idfrog::{
     config::Config,
-    shutdown, signing, tls,
+    shutdown, signing,
+    state::Store,
+    tls,
     upstream::Upstream,
     web::{AppState, router},
 };
@@ -70,10 +72,11 @@ async fn run_server(
         let tls = tls::load(&config, &cli.config).await?;
         let key = signing::load(&config.signing_key_file)?;
         let upstream = Upstream::discover(&config).await?;
+        let store = Store::from_config(&config.state).await?;
         let addr = config.listen;
         let origin = config.origin.clone();
         let traces = config.traces.clone();
-        let app = router(AppState::new(config, upstream, key));
+        let app = router(AppState::new(config, upstream, key, store));
         let app = match &traces {
             Some(traces) => telemetry::instrument(app, provider, traces),
             None => app,

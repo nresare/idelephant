@@ -3,7 +3,7 @@
 idFrog brokers OAuth authorization for MCP servers using an upstream OpenID
 Connect provider such as Microsoft Entra ID. It is a sibling application to
 idElephant in this repository, with its own browser flow, configuration, and
-in-memory grant implementation. The `idp-oauth` and `idp-server` dependencies
+in-memory grant state, optionally kept in DynamoDB instead. The `idp-oauth` and `idp-server` dependencies
 provide shared protocol and HTTP infrastructure. Their versioned path dependencies
 use the canonical sources in the repository's `crates/` directory for development;
 independent consumers can use published crate versions without those paths.
@@ -12,7 +12,7 @@ Run the commands below from the idFrog directory (`cd idfrog` from the repositor
 root).
 
 idFrog provides no local accounts, credentials, invitations, group administration,
-or database. Users authenticate and consent upstream. After validating the required
+or database of its own. Users authenticate and consent upstream. After validating the required
 API permission, idFrog returns directly to the MCP client without another consent
 screen.
 
@@ -188,10 +188,11 @@ are minted by idFrog; upstream bearer credentials are never passed to MCP client
 
 ## State and refresh behavior
 
-Run **one replica**. Browser transactions, authorization codes, and refresh grants
-live only in memory. Restarting invalidates pending flows and refresh tokens;
-already issued access tokens remain valid until expiry when the signing key is
-retained. Multiple replicas and persistent grants are not supported yet.
+By default, browser transactions, authorization codes, and refresh grants live
+only in memory, so run **one replica**. Restarting invalidates pending flows and
+refresh tokens; already issued access tokens remain valid until expiry when the
+signing key is retained. To run several replicas or keep grants across restarts,
+use DynamoDB as described below.
 
 Transactions and codes expire after ten minutes. Access tokens last one hour.
 Refresh-token families expire thirty days after authorization, and rotation does
@@ -206,9 +207,45 @@ Refresh rechecks current API grants. Revoked permissions are removed, and a refr
 cannot introduce permissions outside the original downstream grant. A client can
 also narrow its scopes explicitly; new permissions require a new authorization.
 
-Only hashes of downstream codes and refresh tokens are retained. Upstream refresh
-credentials remain in process memory. State has fixed capacity limits and each
-family permits up to 1,024 rotations before requiring new authorization.
+Only hashes of downstream codes and refresh tokens are retained. In-memory state
+has fixed capacity limits, and each family permits up to 1,024 rotations before
+requiring new authorization.
+
+### DynamoDB state
+
+Build with the `dynamodb` feature (`cargo build -p idfrog --features dynamodb`, or
+`--build-arg FEATURES=dynamodb` for the container) and add:
+
+```toml
+[state]
+backend = "dynamodb"
+table = "idfrog"
+region = "eu-west-1"
+```
+
+`region` is optional, as is `endpoint-url` for DynamoDB Local. Credentials and the
+default region come from the standard AWS chain, such as environment variables,
+EKS Pod Identity, IRSA, or an instance profile. Startup fails if the table cannot
+be described. Create a table with a string partition key `pk`, and enable TTL on
+`expires_at` so expired items are eventually deleted:
+
+```sh
+aws dynamodb create-table --table-name idfrog --billing-mode PAY_PER_REQUEST \
+  --attribute-definitions AttributeName=pk,AttributeType=S \
+  --key-schema AttributeName=pk,KeyType=HASH
+aws dynamodb update-time-to-live --table-name idfrog \
+  --time-to-live-specification Enabled=true,AttributeName=expires_at
+```
+
+idFrog needs `dynamodb:DescribeTable`, `GetItem`, `PutItem`, `UpdateItem`, and
+`DeleteItem` on the table. Reads are strongly consistent and ignore expired items
+regardless of TTL. Conditional writes keep codes and transactions single-use and
+detect refresh replay across replicas, with the same behavior and rotation limit
+as in-memory state; DynamoDB state has no capacity limits.
+
+Items hold the upstream refresh token, the user's claims, and pending PKCE
+verifiers as JSON, so restrict access to the table and consider a customer-managed
+KMS key. Downstream codes and refresh tokens are still stored only as hashes.
 
 The signing key persists separately from grant state. Keep it stable across
 restarts. This version publishes one key; replacing it invalidates previously
@@ -221,7 +258,14 @@ token issuance time as the broker's authentication-time fallback.
 ```sh
 cargo fmt --all --check
 cargo test -p idfrog --locked
-cargo clippy -p idfrog --all-targets --locked --no-deps
+cargo clippy -p idfrog --all-targets --locked --no-deps --features dynamodb
+```
+
+To run the integration tests against DynamoDB Local instead of memory, start it on
+port 8000 and run:
+
+```sh
+IDFROG_TEST_DYNAMODB_ENDPOINT=http://localhost:8000 cargo test -p idfrog --features dynamodb
 ```
 
 The integration tests run both OAuth legs against a local provider with signed ID
@@ -229,7 +273,8 @@ tokens. They cover claim and signature validation, resource and redirect binding
 browser-bound state, automatic callback redirects, code single-use, refresh rotation
 and replay races, and updated group admission. Certificate tests verify PS256 signatures, certificate thumbprints,
 assertion audiences and lifetimes, and fresh assertions for code exchange and refresh.
-They require loopback sockets, with no Entra credentials or database.
+They require loopback sockets, with no Entra credentials or database; each test
+creates its own table when run against DynamoDB Local.
 
 Each HTTP request emits one completion line at INFO level with its method, path,
 status, and latency. Both applications use compact logs without module targets,

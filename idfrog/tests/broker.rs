@@ -12,7 +12,7 @@ use chrono::Utc;
 use idfrog::{
     config::{AuthenticationConfig, Config, RegisteredClient, Resource, UpstreamConfig},
     signing,
-    state::{random_token, token_hash},
+    state::{Store, random_token, token_hash},
     upstream::Upstream,
     web::{AppState, router},
 };
@@ -298,6 +298,7 @@ struct Fixture {
     server: tokio::task::JoinHandle<()>,
     directory: PathBuf,
     config: Config,
+    store: Store,
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -408,13 +409,16 @@ impl Fixture {
                     native: false,
                 },
             ],
+            state: Default::default(),
         };
         config.validate().unwrap();
         let upstream = Upstream::discover(&config).await.unwrap();
+        let store = test_store().await;
         let app = router(AppState::new(
             config.clone(),
             upstream,
             signing::load(&key_path).unwrap(),
+            store.clone(),
         ));
         Self {
             app,
@@ -422,6 +426,7 @@ impl Fixture {
             server,
             directory,
             config,
+            store,
         }
     }
     async fn get(&self, uri: &str, cookie: Option<&str>) -> Response {
@@ -478,6 +483,56 @@ impl Fixture {
             .unwrap()
             .claims
     }
+}
+
+/// The in-memory store, or a fresh table in DynamoDB Local when
+/// `IDFROG_TEST_DYNAMODB_ENDPOINT` is set and the `dynamodb` feature is enabled.
+async fn test_store() -> Store {
+    #[cfg(feature = "dynamodb")]
+    if let Ok(endpoint) = std::env::var("IDFROG_TEST_DYNAMODB_ENDPOINT") {
+        return dynamodb_store(&endpoint).await;
+    }
+    Store::memory()
+}
+
+#[cfg(feature = "dynamodb")]
+async fn dynamodb_store(endpoint: &str) -> Store {
+    use aws_sdk_dynamodb::{
+        Client,
+        config::{BehaviorVersion, Credentials, Region},
+        types::{AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType},
+    };
+    let config = aws_sdk_dynamodb::Config::builder()
+        .behavior_version(BehaviorVersion::latest())
+        .region(Region::new("us-east-1"))
+        .credentials_provider(Credentials::new("test", "test", None, None, "test"))
+        .endpoint_url(endpoint)
+        .http_client(idfrog::dynamodb::http_client())
+        .build();
+    let client = Client::from_conf(config);
+    let table = format!("idfrog-test-{}", random_token());
+    client
+        .create_table()
+        .table_name(&table)
+        .billing_mode(BillingMode::PayPerRequest)
+        .attribute_definitions(
+            AttributeDefinition::builder()
+                .attribute_name("pk")
+                .attribute_type(ScalarAttributeType::S)
+                .build()
+                .unwrap(),
+        )
+        .key_schema(
+            KeySchemaElement::builder()
+                .attribute_name("pk")
+                .key_type(KeyType::Hash)
+                .build()
+                .unwrap(),
+        )
+        .send()
+        .await
+        .unwrap();
+    Store::DynamoDb(idfrog::dynamodb::DynamoStore::new(client, table))
 }
 
 fn authorization_url(scopes: &str) -> Url {
@@ -884,6 +939,7 @@ async fn restart_keeps_verifiable_access_tokens_but_loses_codes_and_refresh_gran
         fixture.config.clone(),
         upstream,
         signing::load(&fixture.config.signing_key_file).unwrap(),
+        Store::memory(),
     ));
     assert_eq!(
         request(
@@ -918,6 +974,56 @@ async fn restart_keeps_verifiable_access_tokens_but_loses_codes_and_refresh_gran
 }
 
 #[tokio::test]
+async fn replicas_sharing_a_store_exchange_codes_and_rotate_refresh_grants() {
+    let fixture = Fixture::new().await;
+    let issued_code = fixture.code("email offline_access").await;
+    let tokens = fixture.exchange(&issued_code).await;
+    let pending_code = fixture.code("email").await;
+    let upstream = Upstream::discover(&fixture.config).await.unwrap();
+    let replica = router(AppState::new(
+        fixture.config.clone(),
+        upstream,
+        signing::load(&fixture.config.signing_key_file).unwrap(),
+        fixture.store.clone(),
+    ));
+    let response = request(
+        &replica,
+        "POST",
+        "/token",
+        None,
+        Some(&code_form(&pending_code)),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let spent = tokens["refresh_token"].as_str().unwrap();
+    let refreshed =
+        json_body(request(&replica, "POST", "/token", None, Some(&refresh_form(spent))).await)
+            .await;
+    let replacement = refreshed["refresh_token"].as_str().unwrap();
+    assert_ne!(replacement, spent);
+    // Replaying the spent token on the original replica revokes the family everywhere.
+    assert_eq!(
+        fixture
+            .post("/token", None, &refresh_form(spent))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        request(
+            &replica,
+            "POST",
+            "/token",
+            None,
+            Some(&refresh_form(replacement))
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
 async fn https_origin_uses_host_scoped_secure_browser_cookie_and_oauth_form_errors_are_json() {
     let fixture = Fixture::new().await;
     let mut config = fixture.config.clone();
@@ -927,6 +1033,7 @@ async fn https_origin_uses_host_scoped_secure_browser_cookie_and_oauth_form_erro
         config,
         upstream,
         signing::load(&fixture.config.signing_key_file).unwrap(),
+        fixture.store.clone(),
     ));
     let url = authorization_url("email");
     let response = request(

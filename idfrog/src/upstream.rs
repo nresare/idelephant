@@ -18,7 +18,7 @@ use openidconnect::{
     },
     reqwest,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration as StdDuration};
 
 pub(crate) type OidcClient = CoreClient<
@@ -39,12 +39,13 @@ pub struct Upstream {
     resources: Vec<Resource>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct LoginChallenge {
     pub nonce: String,
     pub verifier: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct UpstreamIdentity {
     pub subject: String,
     pub upstream_subject: String,

@@ -1,5 +1,5 @@
 use idfrog::{
-    config::{AuthenticationConfig, Config, validate_endpoint},
+    config::{AuthenticationConfig, Config, StateConfig, validate_endpoint},
     signing,
     state::random_token,
 };
@@ -207,5 +207,36 @@ fn traces_are_optional_and_validate_the_otlp_endpoint_and_service_name() {
         "endpoint = 'http://tempo:4317'\nexcluded-paths = ['/callback?code=secret']",
     ] {
         assert!(toml::from_str::<Config>(&format!("{original}\n[traces]\n{settings}")).is_err());
+    }
+}
+
+#[test]
+fn state_defaults_to_memory_and_dynamodb_needs_a_table() {
+    let original = include_str!("../idfrog.example.toml");
+    let config: Config = toml::from_str(original).unwrap();
+    assert!(matches!(config.state, StateConfig::Memory {}));
+    let mut config: Config = toml::from_str(&format!(
+        "{original}\n[state]\nbackend = 'dynamodb'\ntable = 'idfrog'\nendpoint-url = 'http://localhost:8000'\n"
+    ))
+    .unwrap();
+    config.validate().unwrap();
+    assert!(matches!(
+        config.state,
+        StateConfig::Dynamodb { ref table, region: None, endpoint_url: Some(_) } if table == "idfrog"
+    ));
+    let mut config: Config = toml::from_str(&format!(
+        "{original}\n[state]\nbackend = 'dynamodb'\ntable = ' '\n"
+    ))
+    .unwrap();
+    assert!(config.validate().is_err());
+    for settings in [
+        "backend = 'dynamodb'",
+        "backend = 'redis'",
+        "backend = 'memory'\ntable = 'x'",
+    ] {
+        assert!(
+            toml::from_str::<Config>(&format!("{original}\n[state]\n{settings}")).is_err(),
+            "{settings}"
+        );
     }
 }
