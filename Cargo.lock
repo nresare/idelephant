@@ -247,9 +247,9 @@ dependencies = [
 
 [[package]]
 name = "authzoo-server"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e30b66abd364e47019ae139ad454c4b36a2d3cb4ad9c4571877abc7e8f350748"
+checksum = "a8f50e70131bc07455985df8cee107a0f36f0f31730240ca3b3fabd3e1696efe"
 dependencies = [
  "anyhow",
  "axum",
@@ -258,6 +258,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "rustls",
+ "rustls-graviola",
  "serde",
  "tokio",
  "tracing",
@@ -1865,6 +1866,16 @@ name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
+name = "graviola"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1a15622a211648cbf64f485e0369791466d133eb6578fd99e4a61230c88a6aa"
+dependencies = [
+ "cfg-if",
+ "getrandom 0.4.3",
+]
 
 [[package]]
 name = "group"
@@ -3890,7 +3901,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -4660,6 +4671,16 @@ dependencies = [
  "rustls-webpki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-graviola"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf5d0a370be690f7f1aa4e1b912fde3f5f9a5c53285062fd2d6ac1a52ab3e883"
+dependencies = [
+ "graviola",
+ "rustls",
 ]
 
 [[package]]
