@@ -68,6 +68,6 @@ zqlu = "0.3"
 
 
 [dev-dependencies]
-jsonwebtoken = { version = "11", features = ["rust_crypto"] }
+jsonwebtoken = { version = "12", features = ["rust_crypto"] }
 surrealdb = { version = "3", default-features = false, features = ["kv-mem"] }
 tower = { version = "0.5", features = ["util"] }
