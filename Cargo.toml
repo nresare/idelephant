@@ -31,7 +31,7 @@ rand = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
 tower-sessions-surrealdb-store = { version = "0.10" }
-surrealdb = { version = "3", default-features = false, features = ["protocol-ws"] }
+surrealdb = { version = "4", default-features = false, features = ["protocol-ws"] }
 tower-sessions = "0.15"
 time = "0.3.46"
 humantime = "2.4"
@@ -69,5 +69,5 @@ zqlu = "0.3"
 
 [dev-dependencies]
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }
-surrealdb = { version = "3", default-features = false, features = ["kv-mem"] }
+surrealdb = { version = "4", default-features = false, features = ["kv-mem"] }
 tower = { version = "0.5", features = ["util"] }
